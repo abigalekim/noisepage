@@ -10,7 +10,7 @@
 #include "test_util/storage_test_util.h"
 #include "transaction/deferred_action_manager.h"
 
-namespace terrier {
+namespace noisepage {
 class BlockCompactorBenchmark : public benchmark::Fixture {
  protected:
   storage::BlockStore block_store_{5000, 5000};
@@ -24,7 +24,10 @@ class BlockCompactorBenchmark : public benchmark::Fixture {
   transaction::DeferredActionManager deferred_action_manager_{common::ManagedPointer(&timestamp_manager_)};
   transaction::TransactionManager txn_manager_{common::ManagedPointer(&timestamp_manager_),
                                                common::ManagedPointer(&deferred_action_manager_),
-                                               common::ManagedPointer(&buffer_pool_), true, DISABLED};
+                                               common::ManagedPointer(&buffer_pool_),
+                                               true,
+                                               false,
+                                               DISABLED};
   storage::GarbageCollector gc_{common::ManagedPointer(&timestamp_manager_),
                                 common::ManagedPointer(&deferred_action_manager_),
                                 common::ManagedPointer(&txn_manager_), nullptr};
@@ -177,4 +180,4 @@ BENCHMARK_REGISTER_F(BlockCompactorBenchmark, Gather)->Unit(benchmark::kMillisec
 BENCHMARK_REGISTER_F(BlockCompactorBenchmark, DictionaryCompression)->Unit(benchmark::kMillisecond)->UseManualTime();
 
 BENCHMARK_REGISTER_F(BlockCompactorBenchmark, EndToEndGather)->Unit(benchmark::kMillisecond)->UseManualTime();
-}  // namespace terrier
+}  // namespace noisepage

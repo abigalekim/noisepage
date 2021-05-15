@@ -2,7 +2,7 @@
 #include "execution/sql/runtime_types.h"
 #include "execution/tpl_test.h"
 
-namespace terrier::execution::sql::test {
+namespace noisepage::execution::sql::test {
 
 class RuntimeTypesTest : public TplTest {};
 
@@ -97,6 +97,25 @@ TEST_F(RuntimeTypesTest, DateYMDStringEqualityTest) {
   EXPECT_EQ(res, ymd_res);
   EXPECT_EQ(res.ToString(), "2020-01-01");
   EXPECT_EQ(ymd_res.ToString(), "2020-01-01");
+}
+
+// NOLINTNEXTLINE
+TEST_F(RuntimeTypesTest, DateHashTest) {
+  auto date = Date::FromYMD(1995, 8, 6);
+  EXPECT_EQ(std::hash<Date>()(date), date.Hash());
+  date = Date::FromString("1969-04-20");
+  EXPECT_EQ(std::hash<Date>()(date), date.Hash());
+}
+
+// NOLINTNEXTLINE
+TEST_F(RuntimeTypesTest, DateJsonTest) {
+  auto date = Date::FromYMD(1995, 8, 6);
+  nlohmann::json json;
+  nlohmann::adl_serializer<Date>::to_json(json, date);
+  EXPECT_EQ(json.at("val").get<Date::NativeType>(), date.ToNative());
+
+  auto deserialized_date = nlohmann::adl_serializer<Date>::from_json(json);
+  EXPECT_EQ(deserialized_date, date);
 }
 
 // NOLINTNEXTLINE
@@ -262,6 +281,25 @@ TEST_F(RuntimeTypesTest, TSYMDHMStringEqualityTest) {
 }
 
 // NOLINTNEXTLINE
+TEST_F(RuntimeTypesTest, TimestampHashTest) {
+  auto timestamp = Timestamp::FromYMDHMS(1995, 8, 6, 11, 15, 30);
+  EXPECT_EQ(std::hash<Timestamp>()(timestamp), timestamp.Hash());
+  timestamp = Timestamp::FromString("2020-01-11 10:12:13::timestamp");
+  EXPECT_EQ(std::hash<Timestamp>()(timestamp), timestamp.Hash());
+}
+
+// NOLINTNEXTLINE
+TEST_F(RuntimeTypesTest, TimestampJsonTest) {
+  auto timestamp = Timestamp::FromYMDHMS(1995, 8, 6, 11, 15, 30);
+  nlohmann::json json;
+  nlohmann::adl_serializer<Timestamp>::to_json(json, timestamp);
+  EXPECT_EQ(json.at("val").get<Timestamp::NativeType>(), timestamp.ToNative());
+
+  auto deserialized_timestamp = nlohmann::adl_serializer<Timestamp>::from_json(json);
+  EXPECT_EQ(deserialized_timestamp, timestamp);
+}
+
+// NOLINTNEXTLINE
 TEST_F(RuntimeTypesTest, VarlenComparisons) {
   // Short strings first.
   {
@@ -322,4 +360,23 @@ TEST_F(RuntimeTypesTest, VarlenComparisons) {
   }
 }
 
-}  // namespace terrier::execution::sql::test
+// NOLINTNEXTLINE
+TEST_F(RuntimeTypesTest, DecimalHashTest) {
+  Decimal64 decimal(666);
+  EXPECT_EQ(std::hash<Decimal64>()(decimal), decimal.Hash());
+  decimal = Decimal64(999);
+  EXPECT_EQ(std::hash<Decimal64>()(decimal), decimal.Hash());
+}
+
+// NOLINTNEXTLINE
+TEST_F(RuntimeTypesTest, DecimalJsonTest) {
+  Decimal64 decimal(666);
+  nlohmann::json json;
+  nlohmann::adl_serializer<Decimal64>::to_json(json, decimal);
+  EXPECT_EQ(json.at("val").get<Decimal64::NativeType>(), decimal.operator int64_t());
+
+  auto deserialized_timestamp = nlohmann::adl_serializer<Decimal64>::from_json(json);
+  EXPECT_EQ(deserialized_timestamp, decimal);
+}
+
+}  // namespace noisepage::execution::sql::test

@@ -9,7 +9,7 @@
 #include "spdlog/fmt/fmt.h"
 #include "storage/index/index_defs.h"
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 //===----------------------------------------------------------------------===//
 //
@@ -45,7 +45,7 @@ CodeGen::CodeGen(ast::Context *context, catalog::CatalogAccessor *accessor)
       num_cached_scopes_(0),
       scope_(nullptr),
       accessor_(accessor),
-      pipeline_operating_units_(std::make_unique<brain::PipelineOperatingUnits>()) {
+      pipeline_operating_units_(std::make_unique<selfdriving::PipelineOperatingUnits>()) {
   for (auto &scope : scope_cache_) {
     scope = std::make_unique<Scope>(nullptr);
   }
@@ -85,6 +85,12 @@ ast::Expr *CodeGen::Const64(int64_t val) const {
   return expr;
 }
 
+ast::Expr *CodeGen::ConstU32(uint32_t val) const {
+  ast::Expr *expr = context_->GetNodeFactory()->NewIntLiteral(position_, val);
+  expr->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Uint32));
+  return expr;
+}
+
 ast::Expr *CodeGen::ConstDouble(double val) const {
   ast::Expr *expr = context_->GetNodeFactory()->NewFloatLiteral(position_, val);
   expr->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Float64));
@@ -119,7 +125,7 @@ ast::Expr *CodeGen::ConstNull(type::TypeId type) const {
     case type::TypeId::VARCHAR:
       dummy_expr = StringToSql("");
       break;
-    case type::TypeId::DECIMAL:
+    case type::TypeId::REAL:
       dummy_expr = FloatToSql(0.0);
       break;
     case type::TypeId::VARBINARY:
@@ -182,6 +188,8 @@ ast::Expr *CodeGen::Int32Type() const { return BuiltinType(ast::BuiltinType::Int
 
 ast::Expr *CodeGen::Int64Type() const { return BuiltinType(ast::BuiltinType::Int64); }
 
+ast::Expr *CodeGen::Uint32Type() const { return BuiltinType(ast::BuiltinType::Uint32); }
+
 ast::Expr *CodeGen::Float32Type() const { return BuiltinType(ast::BuiltinType::Float32); }
 
 ast::Expr *CodeGen::Float64Type() const { return BuiltinType(ast::BuiltinType::Float64); }
@@ -233,7 +241,7 @@ ast::Expr *CodeGen::TplType(sql::TypeId type) {
   }
 }
 
-ast::Expr *CodeGen::AggregateType(parser::ExpressionType agg_type, sql::TypeId ret_type) const {
+ast::Expr *CodeGen::AggregateType(parser::ExpressionType agg_type, sql::TypeId ret_type, sql::TypeId child_type) const {
   switch (agg_type) {
     case parser::ExpressionType::AGGREGATE_COUNT:
       return BuiltinType(ast::BuiltinType::Kind::CountAggregate);
@@ -264,11 +272,45 @@ ast::Expr *CodeGen::AggregateType(parser::ExpressionType agg_type, sql::TypeId r
         throw NOT_IMPLEMENTED_EXCEPTION(fmt::format("MAX() aggregates on type {}", TypeIdToString(ret_type)));
       }
     case parser::ExpressionType::AGGREGATE_SUM:
-      TERRIER_ASSERT(IsTypeNumeric(ret_type), "Only arithmetic types have sums.");
+      NOISEPAGE_ASSERT(IsTypeNumeric(ret_type), "Only arithmetic types have sums.");
       if (IsTypeIntegral(ret_type)) {
         return BuiltinType(ast::BuiltinType::IntegerSumAggregate);
       }
       return BuiltinType(ast::BuiltinType::RealSumAggregate);
+    case parser::ExpressionType::AGGREGATE_TOP_K:
+      if (child_type == sql::TypeId::Boolean) {
+        return BuiltinType(ast::BuiltinType::BooleanTopKAggregate);
+      } else if (IsTypeIntegral(child_type)) {
+        return BuiltinType(ast::BuiltinType::IntegerTopKAggregate);
+      } else if (IsTypeFloatingPoint(child_type)) {
+        return BuiltinType(ast::BuiltinType::RealTopKAggregate);
+      } else if (child_type == sql::TypeId::Varchar || child_type == sql::TypeId::Varbinary) {
+        return BuiltinType(ast::BuiltinType::StringTopKAggregate);
+      } else if (child_type == sql::TypeId::Date) {
+        return BuiltinType(ast::BuiltinType::DateTopKAggregate);
+      } else if (child_type == sql::TypeId::Timestamp) {
+        return BuiltinType(ast::BuiltinType::TimestampTopKAggregate);
+      } else {
+        throw NOT_IMPLEMENTED_EXCEPTION(
+            fmt::format("TOP K aggregate does not support type {}", TypeIdToString(child_type)));
+      }
+    case parser::ExpressionType::AGGREGATE_HISTOGRAM:
+      if (child_type == sql::TypeId::Boolean) {
+        return BuiltinType(ast::BuiltinType::BooleanHistogramAggregate);
+      } else if (IsTypeIntegral(child_type)) {
+        return BuiltinType(ast::BuiltinType::IntegerHistogramAggregate);
+      } else if (IsTypeFloatingPoint(child_type)) {
+        return BuiltinType(ast::BuiltinType::RealHistogramAggregate);
+      } else if (child_type == sql::TypeId::Varchar || child_type == sql::TypeId::Varbinary) {
+        return BuiltinType(ast::BuiltinType::StringHistogramAggregate);
+      } else if (child_type == sql::TypeId::Date) {
+        return BuiltinType(ast::BuiltinType::DateHistogramAggregate);
+      } else if (child_type == sql::TypeId::Timestamp) {
+        return BuiltinType(ast::BuiltinType::TimestampHistogramAggregate);
+      } else {
+        throw NOT_IMPLEMENTED_EXCEPTION(
+            fmt::format("HISTOGRAM aggregate does not support type {}", TypeIdToString(child_type)));
+      }
     default: {
       UNREACHABLE("AggregateType() should only be called with aggregates.");
     }
@@ -305,7 +347,7 @@ ast::Expr *CodeGen::PtrCast(ast::Identifier base_name, ast::Expr *arg) const {
 }
 
 ast::Expr *CodeGen::BinaryOp(parsing::Token::Type op, ast::Expr *left, ast::Expr *right) const {
-  TERRIER_ASSERT(parsing::Token::IsBinaryOp(op), "Provided operation isn't binary");
+  NOISEPAGE_ASSERT(parsing::Token::IsBinaryOp(op), "Provided operation isn't binary");
   return context_->GetNodeFactory()->NewBinaryOpExpr(position_, op, left, right);
 }
 
@@ -414,7 +456,12 @@ ast::Expr *CodeGen::StringToSql(std::string_view str) const {
 ast::Expr *CodeGen::IndexIteratorInit(ast::Identifier iter, ast::Expr *exec_ctx_var, uint32_t num_attrs,
                                       uint32_t table_oid, uint32_t index_oid, ast::Identifier col_oids) {
   // @indexIteratorInit(&iter, table_oid, index_oid, execCtx)
-  ast::Expr *iter_ptr = AddressOf(iter);
+  return IndexIteratorInit(AddressOf(iter), exec_ctx_var, num_attrs, table_oid, index_oid, col_oids);
+}
+
+ast::Expr *CodeGen::IndexIteratorInit(ast::Expr *iter_ptr, ast::Expr *exec_ctx_var, uint32_t num_attrs,
+                                      uint32_t table_oid, uint32_t index_oid, ast::Identifier col_oids) {
+  // @indexIteratorInit(iter_ptr, table_oid, index_oid, execCtx)
   ast::Expr *num_attrs_expr = Const32(static_cast<int32_t>(num_attrs));
   ast::Expr *table_oid_expr = Const32(static_cast<int32_t>(table_oid));
   ast::Expr *index_oid_expr = Const32(static_cast<int32_t>(index_oid));
@@ -424,7 +471,11 @@ ast::Expr *CodeGen::IndexIteratorInit(ast::Identifier iter, ast::Expr *exec_ctx_
 }
 
 ast::Expr *CodeGen::IndexIteratorScan(ast::Identifier iter, planner::IndexScanType scan_type, uint32_t limit) {
-  // @indexIteratorScanKey(&iter)
+  return IndexIteratorScan(AddressOf(iter), scan_type, limit);
+}
+
+ast::Expr *CodeGen::IndexIteratorScan(ast::Expr *iter_ptr, planner::IndexScanType scan_type, uint32_t limit) {
+  // @indexIteratorScanKey(iter_ptr)
   ast::Builtin builtin;
   bool asc_scan = false;
   bool use_limit = false;
@@ -460,9 +511,8 @@ ast::Expr *CodeGen::IndexIteratorScan(ast::Identifier iter, planner::IndexScanTy
       UNREACHABLE("Unknown scan type");
   }
 
-  if (!use_limit && !asc_scan) return CallBuiltin(builtin, {AddressOf(iter)});
+  if (!use_limit && !asc_scan) return CallBuiltin(builtin, {iter_ptr});
 
-  ast::Expr *iter_ptr = AddressOf(iter);
   std::vector<ast::Expr *> args{iter_ptr};
 
   if (asc_scan) args.push_back(Const64(static_cast<int64_t>(asc_type)));
@@ -490,7 +540,7 @@ ast::Expr *CodeGen::PRGet(ast::Expr *pr, type::TypeId type, bool nullable, uint3
     case type::TypeId::BIGINT:
       builtin = nullable ? ast::Builtin::PRGetBigIntNull : ast::Builtin::PRGetBigInt;
       break;
-    case type::TypeId::DECIMAL:
+    case type::TypeId::REAL:
       builtin = nullable ? ast::Builtin::PRGetDoubleNull : ast::Builtin::PRGetDouble;
       break;
     case type::TypeId::DATE:
@@ -500,6 +550,7 @@ ast::Expr *CodeGen::PRGet(ast::Expr *pr, type::TypeId type, bool nullable, uint3
       builtin = nullable ? ast::Builtin::PRGetTimestampNull : ast::Builtin::PRGetTimestamp;
       break;
     case type::TypeId::VARCHAR:
+    case type::TypeId::VARBINARY:
       builtin = nullable ? ast::Builtin::PRGetVarlenNull : ast::Builtin::PRGetVarlen;
       break;
     default:
@@ -529,7 +580,7 @@ ast::Expr *CodeGen::PRSet(ast::Expr *pr, type::TypeId type, bool nullable, uint3
     case type::TypeId::BIGINT:
       builtin = nullable ? ast::Builtin::PRSetBigIntNull : ast::Builtin::PRSetBigInt;
       break;
-    case type::TypeId::DECIMAL:
+    case type::TypeId::REAL:
       builtin = nullable ? ast::Builtin::PRSetDoubleNull : ast::Builtin::PRSetDouble;
       break;
     case type::TypeId::DATE:
@@ -721,7 +772,7 @@ ast::Expr *CodeGen::VPIFilter(ast::Expr *exec_ctx, ast::Expr *vp, parser::Expres
       break;
     default:
       throw NOT_IMPLEMENTED_EXCEPTION(fmt::format("CodeGen: Vector filter type {} from VPI not supported.",
-                                                  parser::ExpressionTypeToString(comp_type, true)));
+                                                  parser::ExpressionTypeToString(comp_type)));
   }
   ast::Expr *call = CallBuiltin(builtin, {exec_ctx, vp, Const32(col_idx), filter_val, tids});
   call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
@@ -762,19 +813,39 @@ ast::Expr *CodeGen::FilterManagerRunFilters(ast::Expr *filter_manager, ast::Expr
   return call;
 }
 
+ast::Expr *CodeGen::ExecCtxRegisterHook(ast::Expr *exec_ctx, uint32_t hook_idx, ast::Identifier hook) {
+  ast::Expr *call =
+      CallBuiltin(ast::Builtin::ExecutionContextRegisterHook, {exec_ctx, Const32(hook_idx), MakeExpr(hook)});
+  call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
+  return call;
+}
+
+ast::Expr *CodeGen::ExecCtxClearHooks(ast::Expr *exec_ctx) {
+  ast::Expr *call = CallBuiltin(ast::Builtin::ExecutionContextClearHooks, {exec_ctx});
+  call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
+  return call;
+}
+
+ast::Expr *CodeGen::ExecCtxInitHooks(ast::Expr *exec_ctx, uint32_t num_hooks) {
+  ast::Expr *call = CallBuiltin(ast::Builtin::ExecutionContextInitHooks, {exec_ctx, Const32(num_hooks)});
+  call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
+  return call;
+}
+
 ast::Expr *CodeGen::ExecCtxAddRowsAffected(ast::Expr *exec_ctx, int64_t num_rows_affected) {
   ast::Expr *call = CallBuiltin(ast::Builtin::ExecutionContextAddRowsAffected, {exec_ctx, Const64(num_rows_affected)});
   call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
   return call;
 }
 
-ast::Expr *CodeGen::ExecCtxRecordFeature(ast::Expr *exec_ctx, pipeline_id_t pipeline_id, feature_id_t feature_id,
-                                         brain::ExecutionOperatingUnitFeatureAttribute feature_attribute,
-                                         ast::Expr *value) {
+ast::Expr *CodeGen::ExecOUFeatureVectorRecordFeature(
+    ast::Expr *ouvec, pipeline_id_t pipeline_id, feature_id_t feature_id,
+    selfdriving::ExecutionOperatingUnitFeatureAttribute feature_attribute,
+    selfdriving::ExecutionOperatingUnitFeatureUpdateMode mode, ast::Expr *value) {
   ast::Expr *call =
-      CallBuiltin(ast::Builtin::ExecutionContextRecordFeature,
-                  {exec_ctx, Const32(pipeline_id.UnderlyingValue()), Const32(feature_id.UnderlyingValue()),
-                   Const32(static_cast<int32_t>(feature_attribute)), value});
+      CallBuiltin(ast::Builtin::ExecOUFeatureVectorRecordFeature,
+                  {ouvec, Const32(pipeline_id.UnderlyingValue()), Const32(feature_id.UnderlyingValue()),
+                   Const32(static_cast<int32_t>(feature_attribute)), Const32(static_cast<int32_t>(mode)), value});
   call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
   return call;
 }
@@ -831,10 +902,10 @@ ast::Expr *CodeGen::Hash(const std::vector<ast::Expr *> &values) {
 // Joins
 // ---------------------------------------------------------
 
-ast::Expr *CodeGen::JoinHashTableInit(ast::Expr *join_hash_table, ast::Expr *exec_ctx, ast::Expr *mem_pool,
+ast::Expr *CodeGen::JoinHashTableInit(ast::Expr *join_hash_table, ast::Expr *exec_ctx,
                                       ast::Identifier build_row_type_name) {
   ast::Expr *call =
-      CallBuiltin(ast::Builtin::JoinHashTableInit, {join_hash_table, exec_ctx, mem_pool, SizeOf(build_row_type_name)});
+      CallBuiltin(ast::Builtin::JoinHashTableInit, {join_hash_table, exec_ctx, SizeOf(build_row_type_name)});
   call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
   return call;
 }
@@ -918,9 +989,8 @@ ast::Expr *CodeGen::JoinHTIteratorFree(ast::Expr *iter) {
 // Hash aggregations
 // ---------------------------------------------------------
 
-ast::Expr *CodeGen::AggHashTableInit(ast::Expr *agg_ht, ast::Expr *exec_ctx, ast::Expr *mem_pool,
-                                     ast::Identifier agg_payload_type) {
-  ast::Expr *call = CallBuiltin(ast::Builtin::AggHashTableInit, {agg_ht, exec_ctx, mem_pool, SizeOf(agg_payload_type)});
+ast::Expr *CodeGen::AggHashTableInit(ast::Expr *agg_ht, ast::Expr *exec_ctx, ast::Identifier agg_payload_type) {
+  ast::Expr *call = CallBuiltin(ast::Builtin::AggHashTableInit, {agg_ht, exec_ctx, SizeOf(agg_payload_type)});
   call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
   return call;
 }
@@ -1053,16 +1123,29 @@ ast::Expr *CodeGen::AggregatorMerge(ast::Expr *agg1, ast::Expr *agg2) {
   return call;
 }
 
-ast::Expr *CodeGen::AggregatorResult(ast::Expr *agg) { return CallBuiltin(ast::Builtin::AggResult, {agg}); }
+ast::Expr *CodeGen::AggregatorResult(ast::Expr *exec_ctx, ast::Expr *agg,
+                                     const parser::ExpressionType &expression_type) {
+  if (expression_type == parser::ExpressionType::AGGREGATE_TOP_K ||
+      expression_type == parser::ExpressionType::AGGREGATE_HISTOGRAM) {
+    return CallBuiltin(ast::Builtin::AggResult, {exec_ctx, agg});
+  }
+  return CallBuiltin(ast::Builtin::AggResult, {agg});
+}
+
+ast::Expr *CodeGen::AggregatorFree(ast::Expr *agg) {
+  ast::Expr *call = CallBuiltin(ast::Builtin::AggFree, {agg});
+  call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
+  return call;
+}
 
 // ---------------------------------------------------------
 // Sorters
 // ---------------------------------------------------------
 
-ast::Expr *CodeGen::SorterInit(ast::Expr *sorter, ast::Expr *mem_pool, ast::Identifier cmp_func_name,
+ast::Expr *CodeGen::SorterInit(ast::Expr *sorter, ast::Expr *exec_ctx, ast::Identifier cmp_func_name,
                                ast::Identifier sort_row_type_name) {
   ast::Expr *call =
-      CallBuiltin(ast::Builtin::SorterInit, {sorter, mem_pool, MakeExpr(cmp_func_name), SizeOf(sort_row_type_name)});
+      CallBuiltin(ast::Builtin::SorterInit, {sorter, exec_ctx, MakeExpr(cmp_func_name), SizeOf(sort_row_type_name)});
   call->SetType(ast::BuiltinType::Get(context_, ast::BuiltinType::Nil));
   return call;
 }
@@ -1197,14 +1280,13 @@ ast::Expr *CodeGen::CSVReaderClose(ast::Expr *reader) {
   return call;
 }
 
-ast::Expr *CodeGen::StorageInterfaceInit(ast::Identifier si, ast::Expr *exec_ctx, uint32_t table_oid,
+ast::Expr *CodeGen::StorageInterfaceInit(ast::Expr *storage_interface_ptr, ast::Expr *exec_ctx, uint32_t table_oid,
                                          ast::Identifier col_oids, bool need_indexes) {
-  ast::Expr *si_ptr = AddressOf(si);
   ast::Expr *table_oid_expr = Const64(static_cast<int64_t>(table_oid));
   ast::Expr *col_oids_expr = MakeExpr(col_oids);
   ast::Expr *need_indexes_expr = ConstBool(need_indexes);
 
-  std::vector<ast::Expr *> args{si_ptr, exec_ctx, table_oid_expr, col_oids_expr, need_indexes_expr};
+  std::vector<ast::Expr *> args{storage_interface_ptr, exec_ctx, table_oid_expr, col_oids_expr, need_indexes_expr};
   return CallBuiltin(ast::Builtin::StorageInterfaceInit, args);
 }
 
@@ -1265,4 +1347,4 @@ void CodeGen::ExitScope() {
   }
 }
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

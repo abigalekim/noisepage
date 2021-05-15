@@ -3,14 +3,33 @@
 #include <string>
 #include <utility>
 
+#include "common/action_context.h"
 #include "common/managed_pointer.h"
 #include "parser/expression/constant_value_expression.h"
 
-namespace terrier {
+namespace noisepage {
 class DBMain;
 }
 
-namespace terrier::settings {
+namespace noisepage::selfdriving::pilot {
+class ChangeKnobActionGenerator;
+template <class T>
+class ChangeKnobAction;
+namespace test {
+class GenerateChangeKnobAction_GenerateAction_Test;
+class QueryTraceLogging;
+}  // namespace test
+}  // namespace noisepage::selfdriving::pilot
+
+namespace noisepage::task::test {
+class TaskManagerTests;
+}  // namespace noisepage::task::test
+
+namespace noisepage::runner {
+void InitializeRunnersState();
+}
+
+namespace noisepage::settings {
 
 using callback_fn = void (*)(void *, void *, DBMain *, common::ManagedPointer<common::ActionContext> action_context);
 
@@ -23,12 +42,11 @@ using callback_fn = void (*)(void *, void *, DBMain *, common::ManagedPointer<co
  * settings_common.h
  */
 /// @cond DOXYGEN_IGNORE
-enum class Param {                     // NOLINT
-#define __SETTING_ENUM__               // NOLINT
-#include "settings/settings_common.h"  // NOLINT
-#include "settings/settings_defs.h"    // NOLINT
-#undef __SETTING_ENUM__                // NOLINT
-};                                     // NOLINT
+enum class Param {                   // NOLINT
+#define __SETTING_ENUM__             // NOLINT
+#include "settings/settings_defs.h"  // NOLINT
+#undef __SETTING_ENUM__              // NOLINT
+};                                   // NOLINT
 /// @endcond
 
 /**
@@ -60,8 +78,16 @@ class ParamInfo {
         callback_(callback) {}
 
  private:
-  friend class terrier::DBMain;
+  friend void noisepage::runner::InitializeRunnersState();
+  friend class noisepage::DBMain;
   friend class SettingsManager;
+  friend class selfdriving::pilot::ChangeKnobActionGenerator;
+  friend class selfdriving::pilot::ChangeKnobAction<bool>;
+  friend class selfdriving::pilot::ChangeKnobAction<int32_t>;
+  friend class selfdriving::pilot::ChangeKnobAction<int64_t>;
+  friend class selfdriving::pilot::test::GenerateChangeKnobAction_GenerateAction_Test;
+  friend class selfdriving::pilot::test::QueryTraceLogging;
+  friend class task::test::TaskManagerTests;
   std::string name_;
   parser::ConstantValueExpression value_;
   std::string desc_;
@@ -72,4 +98,4 @@ class ParamInfo {
   callback_fn callback_;
 };
 
-}  // namespace terrier::settings
+}  // namespace noisepage::settings

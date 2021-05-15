@@ -1,10 +1,8 @@
 #include "loggers/catalog_logger.h"
 
-#include <memory>
-
-namespace terrier::catalog {
-
-std::shared_ptr<spdlog::logger> catalog_logger = nullptr;  // NOLINT
+namespace noisepage::catalog {
+#ifdef NOISEPAGE_USE_LOGGING
+common::SanctionedSharedPtr<spdlog::logger>::Ptr catalog_logger = nullptr;
 
 void InitCatalogLogger() {
   if (catalog_logger == nullptr) {
@@ -12,5 +10,5 @@ void InitCatalogLogger() {
     spdlog::register_logger(catalog_logger);
   }
 }
-
-}  // namespace terrier::catalog
+#endif
+}  // namespace noisepage::catalog

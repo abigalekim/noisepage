@@ -11,22 +11,20 @@
 #include "common/macros.h"
 #include "common/strong_typedef.h"
 #include "parser/expression/abstract_expression.h"
+#include "parser/expression/constant_value_expression.h"
 #include "type/type_id.h"
 #include "type/type_util.h"
 
-namespace terrier {
+namespace noisepage {
 class StorageTestUtil;
-}
+}  // namespace noisepage
 
-namespace terrier::tpcc {
-class Schemas;
-}
-
-namespace terrier::catalog {
+namespace noisepage::catalog {
 
 namespace postgres {
 class Builder;
-}
+class PgCoreImpl;
+}  // namespace postgres
 
 /**
  * Internal object for representing SQL table schema
@@ -38,6 +36,8 @@ class Schema {
    */
   class Column {
    public:
+    // TODO(Matt): does having two constructors even make sense anymore?
+
     /**
      * Instantiates a Column object, primary to be used for building a Schema object (non VARLEN attributes)
      * @param name column name
@@ -49,34 +49,31 @@ class Schema {
            const parser::AbstractExpression &default_value)
         : name_(std::move(name)),
           type_(type),
-          attr_size_(type::TypeUtil::GetTypeSize(type_)),
+          attr_length_(type::TypeUtil::GetTypeSize(type_)),
           nullable_(nullable),
           oid_(INVALID_COLUMN_OID),
           default_value_(default_value.Copy()) {
-      TERRIER_ASSERT(attr_size_ == 1 || attr_size_ == 2 || attr_size_ == 4 || attr_size_ == 8,
-                     "This constructor is meant for non-VARLEN columns.");
-      TERRIER_ASSERT(type_ != type::TypeId::INVALID, "Attribute type cannot be INVALID.");
+      Validate();
     }
 
     /**
      * Instantiates a Column object, primary to be used for building a Schema object (VARLEN attributes only)
      * @param name column name
      * @param type SQL type for this column
-     * @param max_varlen_size the maximum length of the varlen entry
+     * @param type_modifier the maximum varlen size or precision for decimal
      * @param nullable true if the column is nullable, false otherwise
      * @param default_value for the column
      */
-    Column(std::string name, const type::TypeId type, const uint16_t max_varlen_size, const bool nullable,
+    Column(std::string name, const type::TypeId type, const int32_t type_modifier, const bool nullable,
            const parser::AbstractExpression &default_value)
         : name_(std::move(name)),
           type_(type),
-          attr_size_(type::TypeUtil::GetTypeSize(type_)),
-          max_varlen_size_(max_varlen_size),
+          attr_length_(type::TypeUtil::GetTypeSize(type_)),
+          type_modifier_(type_modifier),
           nullable_(nullable),
           oid_(INVALID_COLUMN_OID),
           default_value_(default_value.Copy()) {
-      TERRIER_ASSERT(attr_size_ == storage::VARLEN_COLUMN, "This constructor is meant for VARLEN columns.");
-      TERRIER_ASSERT(type_ != type::TypeId::INVALID, "Attribute type cannot be INVALID.");
+      Validate();
     }
 
     /**
@@ -86,12 +83,12 @@ class Schema {
     Column(const Column &old_column)
         : name_(old_column.name_),
           type_(old_column.type_),
-          attr_size_(old_column.attr_size_),
-          max_varlen_size_(old_column.max_varlen_size_),
+          attr_length_(old_column.attr_length_),
+          type_modifier_(old_column.type_modifier_),
           nullable_(old_column.nullable_),
           oid_(old_column.oid_),
           default_value_(old_column.default_value_->Copy()) {
-      TERRIER_ASSERT(type_ != type::TypeId::INVALID, "Attribute type cannot be INVALID.");
+      Validate();
     }
 
     /**
@@ -102,11 +99,12 @@ class Schema {
     Column &operator=(const Column &col) {
       name_ = col.name_;
       type_ = col.type_;
-      attr_size_ = col.attr_size_;
-      max_varlen_size_ = col.max_varlen_size_;
+      attr_length_ = col.attr_length_;
+      type_modifier_ = col.type_modifier_;
       nullable_ = col.nullable_;
       oid_ = col.oid_;
       default_value_ = col.default_value_->Copy();
+      Validate();
       return *this;
     }
 
@@ -114,6 +112,7 @@ class Schema {
      * @return column name
      */
     const std::string &Name() const { return name_; }
+
     /**
      * @return true if the column is nullable, false otherwise
      */
@@ -122,15 +121,12 @@ class Schema {
     /**
      * @return size of the attribute in bytes. Varlen attributes have the sign bit set.
      */
-    uint16_t AttrSize() const { return attr_size_; }
+    uint16_t AttributeLength() const { return attr_length_; }
 
     /**
      * @return The maximum length of this column (only valid if it's VARLEN)
      */
-    uint16_t MaxVarlenSize() const {
-      TERRIER_ASSERT(attr_size_ == storage::VARLEN_COLUMN, "This attribute has no meaning for non-VARLEN columns.");
-      return max_varlen_size_;
-    }
+    int32_t TypeModifier() const { return type_modifier_; }
 
     /**
      * @return SQL type for this column
@@ -160,11 +156,8 @@ class Schema {
     common::hash_t Hash() const {
       common::hash_t hash = common::HashUtil::Hash(name_);
       hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(type_));
-      hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(attr_size_));
-      if (attr_size_ == storage::VARLEN_COLUMN)
-        hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(max_varlen_size_));
-      else
-        hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(0));
+      hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(attr_length_));
+      hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(type_modifier_));
       hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(nullable_));
       hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(oid_));
       if (default_value_ != nullptr) hash = common::HashUtil::CombineHashes(hash, default_value_->Hash());
@@ -179,8 +172,10 @@ class Schema {
     bool operator==(const Column &rhs) const {
       if (name_ != rhs.name_) return false;
       if (type_ != rhs.type_) return false;
-      if (attr_size_ != rhs.attr_size_) return false;
-      if (attr_size_ == storage::VARLEN_COLUMN && max_varlen_size_ != rhs.max_varlen_size_) return false;
+      if (attr_length_ != rhs.attr_length_) return false;
+      if ((ShouldHaveTypeModifier() != rhs.ShouldHaveTypeModifier()) ||
+          ((ShouldHaveTypeModifier() && rhs.ShouldHaveTypeModifier()) && type_modifier_ != rhs.type_modifier_))
+        return false;
       if (nullable_ != rhs.nullable_) return false;
       if (oid_ != rhs.oid_) return false;
       if (default_value_ == nullptr) return rhs.default_value_ == nullptr;
@@ -206,10 +201,41 @@ class Schema {
     std::vector<std::unique_ptr<parser::AbstractExpression>> FromJson(const nlohmann::json &j);
 
    private:
+    bool ShouldHaveTypeModifier() const {
+      return type_ == type::TypeId::VARCHAR || type_ == type::TypeId::VARBINARY || type_ == type::TypeId::DECIMAL;
+    }
+
+    void Validate() const {
+      NOISEPAGE_ASSERT(type_ != type::TypeId::INVALID, "Attribute type cannot be INVALID.");
+      NOISEPAGE_ASSERT(default_value_ == nullptr || default_value_->GetReturnValueType() != type::TypeId::INVALID ||
+                           (default_value_->GetReturnValueType() == type::TypeId::INVALID &&
+                            common::ManagedPointer(default_value_)
+                                .CastManagedPointerTo<parser::ConstantValueExpression>()
+                                ->IsNull()),
+                       "Default value either: 1) shouldn't exist 2) shouldn't have INVALID type 3) UNLESS it's NULL.");
+      // TODO(Matt): I don't love that last part that NULL default values come out of the parser with TypeId::INVALID.
+
+      if (type_ == type::TypeId::VARCHAR || type_ == type::TypeId::VARBINARY) {
+        NOISEPAGE_ASSERT(attr_length_ == storage::VARLEN_COLUMN, "Invalid attribute length.");
+        NOISEPAGE_ASSERT(type_modifier_ == -1 || type_modifier_ > 0,
+                         "Type modifier should be -1 (no limit), or a positive integer.");
+      } else if (type_ == type::TypeId::DECIMAL) {
+        NOISEPAGE_ASSERT(attr_length_ == 16, "Invalid attribute length.");
+        NOISEPAGE_ASSERT(type_modifier_ > 0, "Type modifier should be a  positive integer.");
+      } else {
+        NOISEPAGE_ASSERT(attr_length_ == 1 || attr_length_ == 2 || attr_length_ == 4 || attr_length_ == 8,
+                         "Invalid attribute length.");
+        NOISEPAGE_ASSERT(type_modifier_ == -1, "Invalid attribute modifier. Should be -1 for types that don't use it.");
+      }
+    }
+
     std::string name_;
     type::TypeId type_;
-    uint16_t attr_size_;
-    uint16_t max_varlen_size_;
+    uint16_t attr_length_;
+    int32_t type_modifier_ = -1;  // corresponds to Postgres' atttypmod int4: atttypmod records type-specific data
+                                  // supplied at table creation time (for example, the maximum length of a varchar
+                                  // column). It is passed to type-specific input functions and length coercion
+                                  // functions. The value will generally be -1 for types that do not need atttypmod.
     bool nullable_;
     col_oid_t oid_;
 
@@ -219,9 +245,9 @@ class Schema {
 
     friend class DatabaseCatalog;
     friend class postgres::Builder;
+    friend class postgres::PgCoreImpl;
 
-    friend class tpcc::Schemas;
-    friend class terrier::StorageTestUtil;
+    friend class noisepage::StorageTestUtil;
   };
 
   /**
@@ -229,8 +255,8 @@ class Schema {
    * @param columns description of this SQL table's schema as a collection of Columns
    */
   explicit Schema(std::vector<Column> columns) : columns_(std::move(columns)) {
-    TERRIER_ASSERT(!columns_.empty() && columns_.size() <= common::Constants::MAX_COL,
-                   "Number of columns must be between 1 and MAX_COL.");
+    NOISEPAGE_ASSERT(!columns_.empty() && columns_.size() <= common::Constants::MAX_COL,
+                     "Number of columns must be between 1 and MAX_COL.");
     for (uint32_t i = 0; i < columns_.size(); i++) {
       // If not all columns assigned OIDs, then clear the map because this is
       // a definition of a new/modified table not a catalog generated schema.
@@ -252,7 +278,7 @@ class Schema {
    * @return description of the schema for a specific column
    */
   const Column &GetColumn(const uint32_t col_offset) const {
-    TERRIER_ASSERT(col_offset < columns_.size(), "column id is out of bounds for this Schema");
+    NOISEPAGE_ASSERT(col_offset < columns_.size(), "column id is out of bounds for this Schema");
     return columns_[col_offset];
   }
   /**
@@ -260,7 +286,7 @@ class Schema {
    * @return description of the schema for a specific column
    */
   const Column &GetColumn(const col_oid_t col_oid) const {
-    TERRIER_ASSERT(col_oid_to_offset_.count(col_oid) > 0, "col_oid does not exist in this Schema");
+    NOISEPAGE_ASSERT(col_oid_to_offset_.count(col_oid) > 0, "col_oid does not exist in this Schema");
     const uint32_t col_offset = col_oid_to_offset_.at(col_oid);
     return columns_[col_offset];
   }
@@ -276,7 +302,7 @@ class Schema {
         return c;
       }
     }
-    // TODO(John): Should this be a TERRIER_ASSERT to have the same semantics
+    // TODO(John): Should this be a NOISEPAGE_ASSERT to have the same semantics
     // as the other accessor methods above?
     //  (Ling): Probably not? Or is there a proper way for binder to check if a column exists?
     throw std::out_of_range("Column name doesn't exist");
@@ -292,7 +318,7 @@ class Schema {
   nlohmann::json ToJson() const;
 
   /**
-   * Should not be used. See TERRIER_ASSERT
+   * Should not be used. See NOISEPAGE_ASSERT
    */
   void FromJson(const nlohmann::json &j);
 
@@ -335,4 +361,4 @@ class Schema {
 DEFINE_JSON_HEADER_DECLARATIONS(Schema::Column);
 DEFINE_JSON_HEADER_DECLARATIONS(Schema);
 
-}  // namespace terrier::catalog
+}  // namespace noisepage::catalog

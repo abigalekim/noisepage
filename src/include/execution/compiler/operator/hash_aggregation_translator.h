@@ -7,11 +7,11 @@
 #include "execution/compiler/pipeline.h"
 #include "execution/compiler/pipeline_driver.h"
 
-namespace terrier::planner {
+namespace noisepage::planner {
 class AggregatePlanNode;
-}  // namespace terrier::planner
+}  // namespace noisepage::planner
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 class FunctionBuilder;
 
@@ -42,6 +42,14 @@ class HashAggregationTranslator : public OperatorTranslator, public PipelineDriv
   void DefineHelperFunctions(util::RegionVector<ast::FunctionDecl *> *decls) override;
 
   /**
+   * Define all hook functions
+   * @param pipeline Pipeline that helper functions are being generated for.
+   * @param decls Query-level declarations.
+   */
+  void DefineTLSDependentHelperFunctions(const Pipeline &pipeline,
+                                         util::RegionVector<ast::FunctionDecl *> *decls) override;
+
+  /**
    * Initialize the global aggregation hash table.
    */
   void InitializeQueryState(FunctionBuilder *function) const override;
@@ -59,7 +67,7 @@ class HashAggregationTranslator : public OperatorTranslator, public PipelineDriv
   void InitializePipelineState(const Pipeline &pipeline, FunctionBuilder *function) const override;
 
   /**
-   * Tear-down and destroy the thread-local aggregation hash table, if needed.
+   * Tear-down and destroy the thread-local aggregation hash table and aggregators, if needed.
    * @param pipeline Current pipeline.
    * @param function The pipeline generating function.
    */
@@ -110,6 +118,10 @@ class HashAggregationTranslator : public OperatorTranslator, public PipelineDriv
   ast::Expr *GetTableColumn(catalog::col_oid_t col_oid) const override {
     UNREACHABLE("Hash-based aggregations do not produce columns from base tables.");
   }
+
+  void InitializeCounters(const Pipeline &pipeline, FunctionBuilder *function) const override;
+  void RecordCounters(const Pipeline &pipeline, FunctionBuilder *function) const override;
+  void EndParallelPipelineWork(const Pipeline &pipeline, FunctionBuilder *function) const override;
 
  private:
   // Access the plan.
@@ -164,8 +176,14 @@ class HashAggregationTranslator : public OperatorTranslator, public PipelineDriv
   // For minirunners.
   ast::StructDecl *GetStructDecl() const { return struct_decl_; }
 
+  /** Generate start hook function for parallel merge */
+  ast::FunctionDecl *GenerateStartHookFunction() const;
+
+  /** Generate end hook function for parallel merge */
+  ast::FunctionDecl *GenerateEndHookFunction() const;
+
  private:
-  friend class brain::OperatingUnitRecorder;
+  friend class selfdriving::OperatingUnitRecorder;
   // The name of the variable used to:
   // 1. Materialize an input row and insert into the aggregation hash table.
   // 2. Read from an iterator when iterating over all aggregates.
@@ -196,6 +214,29 @@ class HashAggregationTranslator : public OperatorTranslator, public PipelineDriv
 
   // The number of output rows from the aggregation.
   StateDescriptor::Entry num_agg_outputs_;
+
+  // TBB can run multiple tasks using the same thread local state. For counter
+  // recording, each task will record an estimation of the "number of unique
+  // entries" inserted into the aggregation hash table during that task.
+  //
+  // agg_count_ is thus used to track the number of "uniquely" inserted tuples
+  // at the end of the previous task invocation with the same thread local state.
+  //
+  // agg_count_ is thus initialized only in InitializePipelineState. Counters
+  // initialized by InitializeCounters() are "reset" to their initial value
+  // at the start of the task invocation's work function -- however, agg_count_
+  // cannot be reset and so is initialized separately.
+  //
+  // The general pattern for agg_count_ is as follows:
+  //    while (work to be done.)
+  //      - Insert work's data into aggregation hash table
+  //      - Record AggHashTableGetInsertCount() - agg_count_
+  //      - agg_count_ = AggHashTableGetInsertCount()
+  //
+  StateDescriptor::Entry agg_count_;
+
+  ast::Identifier parallel_build_pre_hook_fn_;
+  ast::Identifier parallel_build_post_hook_fn_;
 };
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

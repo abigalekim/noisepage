@@ -2,7 +2,7 @@
 #include "execution/util/fast_rand.h"
 #include "execution/util/file.h"
 
-namespace terrier::execution::util::test {
+namespace noisepage::execution::util::test {
 
 class FileTest : public TplTest {};
 
@@ -33,7 +33,7 @@ TEST_F(FileTest, CreateTemporaryFile) {
 #if 0
 // NOLINTNEXTLINE
 TEST_F(FileTest, Create) {
-  auto path = std::filesystem::path("/tmp/tpl.TEMP." + std::to_string(FastRand().Next()));
+  auto path = std::filesystem::path("/tmp/noisepage-tpl.TEMP." + std::to_string(FastRand().Next()));
 
   {
     // Empty file
@@ -94,7 +94,7 @@ TEST_F(FileTest, Create) {
 
 // NOLINTNEXTLINE
 TEST_F(FileTest, ReadAndWrite) {
-  auto path = std::filesystem::path("/tmp/tpl.TEMP." + std::to_string(FastRand().Next()));
+  auto path = std::filesystem::path("/tmp/noisepage-tpl.TEMP." + std::to_string(FastRand().Next()));
 
   File file(path, File::FLAG_OPEN_ALWAYS | File::FLAG_READ | File::FLAG_WRITE | File::FLAG_DELETE_ON_CLOSE);
   ASSERT_TRUE(file.IsOpen());
@@ -115,7 +115,7 @@ TEST_F(FileTest, ReadAndWrite) {
 
 // NOLINTNEXTLINE
 TEST_F(FileTest, Write) {
-  auto path = std::filesystem::path("/tmp/tpl.TEMP." + std::to_string(FastRand().Next()));
+  auto path = std::filesystem::path("/tmp/noisepage-tpl.TEMP." + std::to_string(FastRand().Next()));
 
   File file(path, File::FLAG_OPEN_ALWAYS | File::FLAG_READ | File::FLAG_WRITE | File::FLAG_DELETE_ON_CLOSE);
   ASSERT_TRUE(file.IsOpen());
@@ -142,7 +142,7 @@ TEST_F(FileTest, Write) {
 
 // NOLINTNEXTLINE
 TEST_F(FileTest, Seek) {
-  auto path = std::filesystem::path("/tmp/tpl.TEMP." + std::to_string(FastRand().Next()));
+  auto path = std::filesystem::path("/tmp/noisepage-tpl.TEMP." + std::to_string(FastRand().Next()));
 
   File file(path, File::FLAG_OPEN_ALWAYS | File::FLAG_READ | File::FLAG_WRITE | File::FLAG_DELETE_ON_CLOSE);
   ASSERT_TRUE(file.IsOpen());
@@ -165,4 +165,4 @@ TEST_F(FileTest, Seek) {
 }
 #endif
 
-}  // namespace terrier::execution::util::test
+}  // namespace noisepage::execution::util::test

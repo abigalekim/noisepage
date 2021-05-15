@@ -10,7 +10,7 @@
 #include "optimizer/rule.h"
 #include "optimizer/statistics/stats_storage.h"
 
-namespace terrier {
+namespace noisepage {
 
 namespace transaction {
 class TransactionContext;
@@ -76,6 +76,12 @@ class OptimizerContext {
   StatsStorage *GetStatsStorage() { return stats_storage_; }
 
   /**
+   * Gets the param list
+   * @return list of param values
+   */
+  common::ManagedPointer<std::vector<parser::ConstantValueExpression>> GetParams() { return params_; }
+
+  /**
    * Adds a OptimizationContext to the tracking list
    * @param ctx OptimizationContext to add to tracking
    */
@@ -128,6 +134,12 @@ class OptimizerContext {
   }
 
   /**
+   * Set the param list
+   * @param params list of param values
+   */
+  void SetParams(common::ManagedPointer<std::vector<parser::ConstantValueExpression>> params) { params_ = params; }
+
+  /**
    * Converts an AbstractOptimizerNode into a GroupExpression.
    * The GroupExpression is internal tracking that is focused on the concept
    * of groups rather than expressions/operators like AbstractOptimizerNode.
@@ -169,7 +181,7 @@ class OptimizerContext {
                                     group_id_t target_group) {
     auto new_gexpr = MakeGroupExpression(node);
     auto ptr = memo_.InsertExpression(new_gexpr, target_group, false);
-    TERRIER_ASSERT(ptr, "Root of expr should not fail insertion");
+    NOISEPAGE_ASSERT(ptr, "Root of expr should not fail insertion");
 
     (*gexpr) = ptr;
     return (ptr == new_gexpr);
@@ -186,7 +198,16 @@ class OptimizerContext {
   void ReplaceRewriteExpression(common::ManagedPointer<AbstractOptimizerNode> node, group_id_t target_group) {
     memo_.EraseExpression(target_group);
     UNUSED_ATTRIBUTE auto ret = memo_.InsertExpression(MakeGroupExpression(node), target_group, false);
-    TERRIER_ASSERT(ret, "Root expr should always be inserted");
+    NOISEPAGE_ASSERT(ret, "Root expr should always be inserted");
+  }
+
+  /**
+   * Registers expr to be deleted on txn_ commit/abort
+   * @param expr Expression to register
+   */
+  void RegisterExprWithTxn(parser::AbstractExpression *expr) {
+    txn_->RegisterCommitAction([=]() { delete expr; });
+    txn_->RegisterAbortAction([=]() { delete expr; });
   }
 
  private:
@@ -198,7 +219,8 @@ class OptimizerContext {
   StatsStorage *stats_storage_{};
   transaction::TransactionContext *txn_{};
   std::vector<OptimizationContext *> track_list_;
+  common::ManagedPointer<std::vector<parser::ConstantValueExpression>> params_;
 };
 
 }  // namespace optimizer
-}  // namespace terrier
+}  // namespace noisepage

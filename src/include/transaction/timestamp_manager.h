@@ -8,12 +8,12 @@
 #include "common/strong_typedef.h"
 #include "transaction/transaction_defs.h"
 
-namespace terrier::storage {
+namespace noisepage::storage {
 // Forward declaration
 class LogSerializerTask;
-}  // namespace terrier::storage
+}  // namespace noisepage::storage
 
-namespace terrier::transaction {
+namespace noisepage::transaction {
 class TransactionManager;
 /**
  * Generates timestamps, and keeps track of the lifetime of transactions (whether they have entered or left the system)
@@ -21,8 +21,8 @@ class TransactionManager;
 class TimestampManager {
  public:
   ~TimestampManager() {
-    TERRIER_ASSERT(curr_running_txns_.empty(),
-                   "Destroying the TimestampManager while txns are still running. That seems wrong.");
+    NOISEPAGE_ASSERT(curr_running_txns_.empty(),
+                     "Destroying the TimestampManager while txns are still running. That seems wrong.");
   }
 
   /**
@@ -41,7 +41,7 @@ class TimestampManager {
    * it is guaranteed that the return timestamp is older than any transactions live.
    * @warning If logging is enabled, txns are not removed from the txn set until they are serialized. Thus, the active
    * txn set can grow greatly in size, making this call expensive. Consider using CachedOldestTransactionStartTime for
-   * better peformance at the cost of a more stale timestamp.
+   * better performance at the cost of a more stale timestamp.
    * @return timestamp that is older than any transactions alive
    */
   timestamp_t OldestTransactionStartTime();
@@ -78,7 +78,7 @@ class TimestampManager {
       start_time = time_++;
 
       const auto ret UNUSED_ATTRIBUTE = curr_running_txns_.emplace(start_time);
-      TERRIER_ASSERT(ret.second, "commit start time should be globally unique");
+      NOISEPAGE_ASSERT(ret.second, "commit start time should be globally unique");
     }  // Release latch on current running transactions
     return start_time;
   }
@@ -93,8 +93,9 @@ class TimestampManager {
    * Bulk remove a set of timestamps from the active txn set. Only grabs the curr_running_txns_latch_ once for all the
    * timestamps.
    * @param timestamps vector of timestamps to remove
+   * @return True if there are no more running transactions after removal. False otherwise.
    */
-  void RemoveTransactions(const std::vector<timestamp_t> &timestamps);
+  bool RemoveTransactions(const std::vector<timestamp_t> &timestamps);
 
   // TODO(Tianyu): Timestamp generation needs to be more efficient (batches)
   // TODO(Tianyu): We don't handle timestamp wrap-arounds. I doubt this would be an issue any time soon.
@@ -108,4 +109,4 @@ class TimestampManager {
   std::unordered_set<timestamp_t> curr_running_txns_;
   mutable common::SpinLatch curr_running_txns_latch_;
 };
-}  // namespace terrier::transaction
+}  // namespace noisepage::transaction

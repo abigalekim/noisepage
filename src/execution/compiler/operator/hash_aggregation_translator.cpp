@@ -6,9 +6,10 @@
 #include "execution/compiler/if.h"
 #include "execution/compiler/loop.h"
 #include "execution/compiler/work_context.h"
+#include "execution/sql/aggregation_hash_table.h"
 #include "planner/plannodes/aggregate_plan_node.h"
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 namespace {
 constexpr char GROUP_BY_TERM_ATTR_PREFIX[] = "gb_term_attr";
@@ -17,7 +18,7 @@ constexpr char AGGREGATE_TERM_ATTR_PREFIX[] = "agg_term_attr";
 
 HashAggregationTranslator::HashAggregationTranslator(const planner::AggregatePlanNode &plan,
                                                      CompilationContext *compilation_context, Pipeline *pipeline)
-    : OperatorTranslator(plan, compilation_context, pipeline, brain::ExecutionOperatingUnitType::DUMMY),
+    : OperatorTranslator(plan, compilation_context, pipeline, selfdriving::ExecutionOperatingUnitType::DUMMY),
       agg_row_var_(GetCodeGen()->MakeFreshIdentifier("aggRow")),
       agg_payload_type_(GetCodeGen()->MakeFreshIdentifier("AggPayload")),
       agg_values_type_(GetCodeGen()->MakeFreshIdentifier("AggValues")),
@@ -25,10 +26,10 @@ HashAggregationTranslator::HashAggregationTranslator(const planner::AggregatePla
       key_check_partial_fn_(GetCodeGen()->MakeFreshIdentifier(pipeline->CreatePipelineFunctionName("KeyCheckPartial"))),
       merge_partitions_fn_(GetCodeGen()->MakeFreshIdentifier(pipeline->CreatePipelineFunctionName("MergePartitions"))),
       build_pipeline_(this, Pipeline::Parallelism::Parallel) {
-  TERRIER_ASSERT(!plan.GetGroupByTerms().empty(), "Hash aggregation should have grouping keys");
-  TERRIER_ASSERT(plan.GetAggregateStrategyType() == planner::AggregateStrategyType::HASH,
-                 "Expected hash-based aggregation plan node");
-  TERRIER_ASSERT(plan.GetChildrenSize() == 1, "Hash aggregations should only have one child");
+  NOISEPAGE_ASSERT(!plan.GetGroupByTerms().empty(), "Hash aggregation should have grouping keys");
+  NOISEPAGE_ASSERT(plan.GetAggregateStrategyType() == planner::AggregateStrategyType::HASH,
+                   "Expected hash-based aggregation plan node");
+  NOISEPAGE_ASSERT(plan.GetChildrenSize() == 1, "Hash aggregations should only have one child");
 
   for (size_t agg_term_idx = 0; agg_term_idx < plan.GetAggregateTerms().size(); agg_term_idx++) {
     const auto &agg_term = plan.GetAggregateTerms()[agg_term_idx];
@@ -75,8 +76,16 @@ HashAggregationTranslator::HashAggregationTranslator(const planner::AggregatePla
     local_agg_ht_ = build_pipeline_.DeclarePipelineStateEntry("aggHashTable", agg_ht_type);
   }
 
-  num_agg_inputs_ = CounterDeclare("num_agg_inputs");
-  num_agg_outputs_ = CounterDeclare("num_agg_outputs");
+  num_agg_inputs_ = CounterDeclare("num_agg_inputs", &build_pipeline_);
+  agg_count_ = CounterDeclare("agg_count", &build_pipeline_);
+  num_agg_outputs_ = CounterDeclare("num_agg_outputs", pipeline);
+
+  if (build_pipeline_.IsParallel() && IsPipelineMetricsEnabled()) {
+    parallel_build_pre_hook_fn_ =
+        GetCodeGen()->MakeFreshIdentifier(build_pipeline_.CreatePipelineFunctionName("PreHook"));
+    parallel_build_post_hook_fn_ =
+        GetCodeGen()->MakeFreshIdentifier(build_pipeline_.CreatePipelineFunctionName("PostHook"));
+  }
 }
 
 ast::StructDecl *HashAggregationTranslator::GeneratePayloadStruct() {
@@ -97,7 +106,9 @@ ast::StructDecl *HashAggregationTranslator::GeneratePayloadStruct() {
   term_idx = 0;
   for (const auto &term : GetAggPlan().GetAggregateTerms()) {
     auto field_name = codegen->MakeIdentifier(AGGREGATE_TERM_ATTR_PREFIX + std::to_string(term_idx));
-    auto type = codegen->AggregateType(term->GetExpressionType(), sql::GetTypeId(term->GetReturnValueType()));
+    NOISEPAGE_ASSERT(term->GetChildren().size() == 1, "Aggregate term should only have one child");
+    auto type = codegen->AggregateType(term->GetExpressionType(), sql::GetTypeId(term->GetReturnValueType()),
+                                       sql::GetTypeId(term->GetChild(0)->GetReturnValueType()));
     fields.push_back(codegen->MakeField(field_name, type));
     term_idx++;
   }
@@ -263,7 +274,7 @@ void HashAggregationTranslator::DefineHelperFunctions(util::RegionVector<ast::Fu
 }
 
 void HashAggregationTranslator::InitializeAggregationHashTable(FunctionBuilder *function, ast::Expr *agg_ht) const {
-  function->Append(GetCodeGen()->AggHashTableInit(agg_ht, GetExecutionContext(), GetMemoryPool(), agg_payload_type_));
+  function->Append(GetCodeGen()->AggHashTableInit(agg_ht, GetExecutionContext(), agg_payload_type_));
 }
 
 void HashAggregationTranslator::TearDownAggregationHashTable(FunctionBuilder *function, ast::Expr *agg_ht) const {
@@ -273,11 +284,8 @@ void HashAggregationTranslator::TearDownAggregationHashTable(FunctionBuilder *fu
 void HashAggregationTranslator::InitializeQueryState(FunctionBuilder *function) const {
   InitializeAggregationHashTable(function, global_agg_ht_.GetPtr(GetCodeGen()));
   for (auto &p : distinct_filters_) {
-    p.second.Initialize(GetCodeGen(), function, GetExecutionContext(), GetMemoryPool());
+    p.second.Initialize(GetCodeGen(), function, GetExecutionContext());
   }
-
-  CounterSet(function, num_agg_inputs_, 0);
-  CounterSet(function, num_agg_outputs_, 0);
 }
 
 void HashAggregationTranslator::TearDownQueryState(FunctionBuilder *function) const {
@@ -287,15 +295,163 @@ void HashAggregationTranslator::TearDownQueryState(FunctionBuilder *function) co
   }
 }
 
+ast::FunctionDecl *HashAggregationTranslator::GenerateStartHookFunction() const {
+  auto *codegen = GetCodeGen();
+  auto *pipeline = &build_pipeline_;
+
+  auto params = GetHookParams(*pipeline, nullptr, nullptr);
+  auto ret_type = codegen->BuiltinType(ast::BuiltinType::Kind::Nil);
+  FunctionBuilder builder(codegen, parallel_build_pre_hook_fn_, std::move(params), ret_type);
+  { pipeline->InjectStartResourceTracker(&builder, true); }
+  return builder.Finish();
+}
+
+ast::FunctionDecl *HashAggregationTranslator::GenerateEndHookFunction() const {
+  auto *codegen = GetCodeGen();
+  auto *pipeline = &build_pipeline_;
+
+  auto override_value = codegen->MakeIdentifier("overrideValue");
+  auto uint32_type = codegen->BuiltinType(ast::BuiltinType::Uint32);
+  auto params = GetHookParams(*pipeline, &override_value, uint32_type);
+
+  auto ret_type = codegen->BuiltinType(ast::BuiltinType::Kind::Nil);
+  FunctionBuilder builder(codegen, parallel_build_post_hook_fn_, std::move(params), ret_type);
+  {
+    auto num_tuples = codegen->MakeFreshIdentifier("num_tuples");
+    auto *count = codegen->CallBuiltin(ast::Builtin::AggHashTableGetInsertCount, {global_agg_ht_.GetPtr(codegen)});
+    builder.Append(codegen->DeclareVarWithInit(num_tuples, count));
+
+    // FeatureRecord with the overrideValue
+    FeatureRecord(&builder, selfdriving::ExecutionOperatingUnitType::PARALLEL_MERGE_AGGBUILD,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, *pipeline,
+                  codegen->MakeExpr(num_tuples));
+    FeatureRecord(&builder, selfdriving::ExecutionOperatingUnitType::PARALLEL_MERGE_AGGBUILD,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, *pipeline,
+                  codegen->MakeExpr(override_value));
+
+    // End Tracker
+    pipeline->InjectEndResourceTracker(&builder, true);
+  }
+  return builder.Finish();
+}
+
+void HashAggregationTranslator::DefineTLSDependentHelperFunctions(const Pipeline &pipeline,
+                                                                  util::RegionVector<ast::FunctionDecl *> *decls) {
+  if (IsBuildPipeline(pipeline) && build_pipeline_.IsParallel() && IsPipelineMetricsEnabled()) {
+    decls->push_back(GenerateStartHookFunction());
+    decls->push_back(GenerateEndHookFunction());
+  }
+}
+
 void HashAggregationTranslator::InitializePipelineState(const Pipeline &pipeline, FunctionBuilder *function) const {
   if (IsBuildPipeline(pipeline) && build_pipeline_.IsParallel()) {
     InitializeAggregationHashTable(function, local_agg_ht_.GetPtr(GetCodeGen()));
+
+    // agg_count_ cannot be initialized in InitializeCounters.
+    // @see HashAggregationTranslator::agg_count_ for reasoning.
+    CounterSet(function, agg_count_, 0);
+  }
+
+  InitializeCounters(pipeline, function);
+}
+
+void HashAggregationTranslator::InitializeCounters(const Pipeline &pipeline, FunctionBuilder *function) const {
+  if (IsBuildPipeline(pipeline)) {
+    CounterSet(function, num_agg_inputs_, 0);
+  } else {
+    CounterSet(function, num_agg_outputs_, 0);
   }
 }
 
 void HashAggregationTranslator::TearDownPipelineState(const Pipeline &pipeline, FunctionBuilder *function) const {
-  if (IsBuildPipeline(pipeline) && build_pipeline_.IsParallel()) {
-    TearDownAggregationHashTable(function, local_agg_ht_.GetPtr(GetCodeGen()));
+  if (IsBuildPipeline(pipeline)) {
+    if (build_pipeline_.IsParallel()) {
+      TearDownAggregationHashTable(function, local_agg_ht_.GetPtr(GetCodeGen()));
+    }
+  } else if (GetAggPlan().RequiresCleanup()) {
+    // If any of the aggregators are required to be cleaned up, then we need to go through the hash table and free them
+    auto *codegen = GetCodeGen();
+    // var iterBase: AHTIterator
+    ast::Identifier aht_iter_base = codegen->MakeFreshIdentifier("iterBase");
+    ast::Expr *aht_iter_type = codegen->BuiltinType(ast::BuiltinType::AHTIterator);
+    function->Append(codegen->DeclareVarNoInit(aht_iter_base, aht_iter_type));
+
+    // var ahtIter = &ahtIterBase
+    ast::Identifier aht_iter = codegen->MakeFreshIdentifier("iter");
+    ast::Expr *aht_iter_init = codegen->AddressOf(codegen->MakeExpr(aht_iter_base));
+    function->Append(codegen->DeclareVarWithInit(aht_iter, aht_iter_init));
+
+    Loop loop(function,
+              codegen->MakeStmt(
+                  codegen->AggHashTableIteratorInit(codegen->MakeExpr(aht_iter), global_agg_ht_.GetPtr(codegen))),
+              codegen->AggHashTableIteratorHasNext(codegen->MakeExpr(aht_iter)),
+              codegen->MakeStmt(codegen->AggHashTableIteratorNext(codegen->MakeExpr(aht_iter))));
+    {
+      // var aggRow = @ahtIterGetRow()
+      function->Append(codegen->DeclareVarWithInit(
+          agg_row_var_, codegen->AggHashTableIteratorGetRow(codegen->MakeExpr(aht_iter), agg_payload_type_)));
+      for (auto agg_term_idx : GetAggPlan().GetMemoryAllocatingAggregatorIndexes()) {
+        auto *agg_term = GetAggregateTermPtr(agg_row_var_, agg_term_idx);
+        function->Append(GetCodeGen()->AggregatorFree(agg_term));
+      }
+    }
+    loop.EndLoop();
+  }
+}
+
+void HashAggregationTranslator::RecordCounters(const Pipeline &pipeline, FunctionBuilder *function) const {
+  auto *codegen = GetCodeGen();
+  if (IsBuildPipeline(pipeline)) {
+    const auto &agg_ht = pipeline.IsParallel() ? local_agg_ht_ : global_agg_ht_;
+    FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::AGGREGATE_BUILD,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline, CounterVal(num_agg_inputs_));
+
+    if (build_pipeline_.IsParallel() && IsCountersEnabled()) {
+      // In parallel mode, we subtract from the insert count of the last task that might
+      // have been run with the current thread. This is to more correctly model the
+      // amount of work performed by the current task.
+      // @see HashAggregationTranslator::agg_count_ for further information.
+      auto *ins_count = codegen->CallBuiltin(ast::Builtin::AggHashTableGetInsertCount, {agg_ht.GetPtr(codegen)});
+      auto *minus = codegen->BinaryOp(parsing::Token::Type::MINUS, ins_count, agg_count_.Get(codegen));
+      FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::AGGREGATE_BUILD,
+                    selfdriving::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline, minus);
+    } else {
+      FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::AGGREGATE_BUILD,
+                    selfdriving::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline,
+                    codegen->CallBuiltin(ast::Builtin::AggHashTableGetTupleCount, {agg_ht.GetPtr(codegen)}));
+    }
+
+    FeatureArithmeticRecordMul(function, pipeline, GetTranslatorId(), CounterVal(num_agg_inputs_));
+  } else {
+    ast::Expr *agg_ht;
+    if (pipeline.IsParallel()) {
+      // See note in PerformPipelineWork(), the aggregation table is
+      // provided as a function parameter.
+      auto agg_ht_param_position = pipeline.PipelineParams().size();
+      agg_ht = function->GetParameterByPosition(agg_ht_param_position);
+    } else {
+      agg_ht = global_agg_ht_.GetPtr(codegen);
+    }
+
+    FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::AGGREGATE_ITERATE,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline,
+                  CounterVal(num_agg_outputs_));
+
+    FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::AGGREGATE_ITERATE,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline,
+                  codegen->CallBuiltin(ast::Builtin::AggHashTableGetTupleCount, {agg_ht}));
+    FeatureArithmeticRecordMul(function, pipeline, GetTranslatorId(), CounterVal(num_agg_outputs_));
+  }
+}
+
+void HashAggregationTranslator::EndParallelPipelineWork(const Pipeline &pipeline, FunctionBuilder *function) const {
+  RecordCounters(pipeline, function);
+
+  if (IsBuildPipeline(pipeline) && IsCountersEnabled()) {
+    auto *codegen = GetCodeGen();
+    const auto &agg_ht = local_agg_ht_;
+    auto *tuple_count = codegen->CallBuiltin(ast::Builtin::AggHashTableGetInsertCount, {agg_ht.GetPtr(codegen)});
+    function->Append(codegen->Assign(agg_count_.Get(codegen), tuple_count));
   }
 }
 
@@ -480,7 +636,7 @@ void HashAggregationTranslator::PerformPipelineWork(WorkContext *context, Functi
     const auto &agg_ht = build_pipeline_.IsParallel() ? local_agg_ht_ : global_agg_ht_;
     UpdateAggregates(context, function, agg_ht.GetPtr(codegen));
   } else {
-    TERRIER_ASSERT(IsProducePipeline(context->GetPipeline()), "Pipeline is unknown to hash aggregation translator");
+    NOISEPAGE_ASSERT(IsProducePipeline(context->GetPipeline()), "Pipeline is unknown to hash aggregation translator");
     ast::Expr *agg_ht;
     if (GetPipeline()->IsParallel()) {
       // In parallel-mode, we would've issued a parallel partitioned scan. In
@@ -498,31 +654,35 @@ void HashAggregationTranslator::PerformPipelineWork(WorkContext *context, Functi
 }
 
 void HashAggregationTranslator::FinishPipelineWork(const Pipeline &pipeline, FunctionBuilder *function) const {
-  auto *codegen = GetCodeGen();
-  const auto &agg_ht = build_pipeline_.IsParallel() ? local_agg_ht_ : global_agg_ht_;
-
   if (IsBuildPipeline(pipeline)) {
     if (build_pipeline_.IsParallel()) {
+      auto *codegen = GetCodeGen();
+      if (IsPipelineMetricsEnabled()) {
+        // Setup the hooks
+        auto *exec_ctx = GetExecutionContext();
+        auto num_hooks = static_cast<uint32_t>(sql::AggregationHashTable::HookOffsets::NUM_HOOKS);
+        auto pre = static_cast<uint32_t>(sql::AggregationHashTable::HookOffsets::StartHook);
+        auto post = static_cast<uint32_t>(sql::AggregationHashTable::HookOffsets::EndHook);
+        function->Append(codegen->ExecCtxInitHooks(exec_ctx, num_hooks));
+        function->Append(codegen->ExecCtxRegisterHook(exec_ctx, pre, parallel_build_pre_hook_fn_));
+        function->Append(codegen->ExecCtxRegisterHook(exec_ctx, post, parallel_build_post_hook_fn_));
+      }
+
       auto global_agg_ht = global_agg_ht_.GetPtr(codegen);
       auto thread_state_container = GetThreadStateContainer();
       auto tl_agg_ht_offset = local_agg_ht_.OffsetFromState(codegen);
       function->Append(codegen->AggHashTableMovePartitions(global_agg_ht, thread_state_container, tl_agg_ht_offset,
                                                            merge_partitions_fn_));
-    }
 
-    FeatureRecord(function, brain::ExecutionOperatingUnitType::AGGREGATE_BUILD,
-                  brain::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline, CounterVal(num_agg_inputs_));
-    FeatureRecord(function, brain::ExecutionOperatingUnitType::AGGREGATE_BUILD,
-                  brain::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline,
-                  codegen->CallBuiltin(ast::Builtin::AggHashTableGetTupleCount, {agg_ht.GetPtr(codegen)}));
-    FeatureArithmeticRecordMul(function, pipeline, GetTranslatorId(), CounterVal(num_agg_inputs_));
-  } else {
-    FeatureRecord(function, brain::ExecutionOperatingUnitType::AGGREGATE_ITERATE,
-                  brain::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline, CounterVal(num_agg_outputs_));
-    FeatureRecord(function, brain::ExecutionOperatingUnitType::AGGREGATE_ITERATE,
-                  brain::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline,
-                  codegen->CallBuiltin(ast::Builtin::AggHashTableGetTupleCount, {agg_ht.GetPtr(codegen)}));
-    FeatureArithmeticRecordMul(function, pipeline, GetTranslatorId(), CounterVal(num_agg_outputs_));
+      if (IsPipelineMetricsEnabled()) {
+        auto *exec_ctx = GetExecutionContext();
+        function->Append(codegen->ExecCtxClearHooks(exec_ctx));
+      }
+    } else {
+      RecordCounters(pipeline, function);
+    }
+  } else if (!pipeline.IsParallel()) {
+    RecordCounters(pipeline, function);
   }
 }
 
@@ -532,24 +692,25 @@ ast::Expr *HashAggregationTranslator::GetChildOutput(WorkContext *context, uint3
     if (child_idx == 0) {
       return GetGroupByTerm(agg_row_var_, attr_idx);
     }
-    return GetCodeGen()->AggregatorResult(GetAggregateTermPtr(agg_row_var_, attr_idx));
+    return GetCodeGen()->AggregatorResult(GetExecutionContext(), GetAggregateTermPtr(agg_row_var_, attr_idx),
+                                          GetAggPlan().GetAggregateTerms().at(attr_idx)->GetExpressionType());
   }
   // The request is in the build pipeline. Forward to child translator.
   return OperatorTranslator::GetChildOutput(context, child_idx, attr_idx);
 }
 
 util::RegionVector<ast::FieldDecl *> HashAggregationTranslator::GetWorkerParams() const {
-  TERRIER_ASSERT(build_pipeline_.IsParallel(), "Should not issue parallel scan if pipeline isn't parallelized.");
+  NOISEPAGE_ASSERT(build_pipeline_.IsParallel(), "Should not issue parallel scan if pipeline isn't parallelized.");
   auto *codegen = GetCodeGen();
   return codegen->MakeFieldList({codegen->MakeField(codegen->MakeIdentifier("aggHashTable"),
                                                     codegen->PointerType(ast::BuiltinType::AggregationHashTable))});
 }
 
 void HashAggregationTranslator::LaunchWork(FunctionBuilder *function, ast::Identifier work_func_name) const {
-  TERRIER_ASSERT(build_pipeline_.IsParallel(), "Should not issue parallel scan if pipeline isn't parallelized.");
+  NOISEPAGE_ASSERT(build_pipeline_.IsParallel(), "Should not issue parallel scan if pipeline isn't parallelized.");
   auto *codegen = GetCodeGen();
   function->Append(codegen->AggHashTableParallelScan(global_agg_ht_.GetPtr(codegen), GetQueryStatePtr(),
                                                      GetThreadStateContainer(), work_func_name));
 }
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

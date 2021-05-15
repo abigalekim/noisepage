@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#include "catalog/postgres/pg_statistic_impl.h"
 #include "optimizer/memo.h"
 #include "optimizer/operator_node.h"
 #include "optimizer/physical_operators.h"
@@ -12,7 +13,7 @@
 #include "parser/expression_util.h"
 #include "storage/data_table.h"
 
-namespace terrier::optimizer {
+namespace noisepage::optimizer {
 
 /**
  * Definition for first type of pair
@@ -99,7 +100,7 @@ void InputColumnDeriver::Visit(const Limit *op) {
 void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const OrderBy *op) {
   // we need to pass down both required columns and sort columns
   auto prop = properties_->GetPropertyOfType(PropertyType::SORT);
-  TERRIER_ASSERT(prop != nullptr, "property should exist");
+  NOISEPAGE_ASSERT(prop != nullptr, "property should exist");
 
   ExprSet input_cols_set;
   for (auto expr : required_cols_) {
@@ -162,7 +163,7 @@ void InputColumnDeriver::Visit(const InnerIndexJoin *op) {
     if (col->GetExpressionType() == parser::ExpressionType::COLUMN_VALUE) {
       tv_expr = col.CastManagedPointerTo<parser::ColumnValueExpression>();
     } else {
-      TERRIER_ASSERT(parser::ExpressionUtil::IsAggregateExpression(col), "col should be AggregateExpression");
+      NOISEPAGE_ASSERT(parser::ExpressionUtil::IsAggregateExpression(col), "col should be AggregateExpression");
 
       ExprSet tv_exprs;
       // Get the ColumnValueExpression used in the AggregateExpression
@@ -174,12 +175,12 @@ void InputColumnDeriver::Visit(const InnerIndexJoin *op) {
 
       // We get only the first ColumnValueExpression (should probably assert check this)
       tv_expr = (*(tv_exprs.begin())).CastManagedPointerTo<parser::ColumnValueExpression>();
-      TERRIER_ASSERT(tv_exprs.size() == 1, "Uh oh, multiple TVEs in AggregateExpression found");
+      NOISEPAGE_ASSERT(tv_exprs.size() == 1, "Uh oh, multiple TVEs in AggregateExpression found");
     }
 
     // Pick the probe if alias matches
     std::string tv_table_name = tv_expr->GetTableName();
-    TERRIER_ASSERT(!tv_table_name.empty(), "Table Name should not be empty");
+    NOISEPAGE_ASSERT(!tv_table_name.empty(), "Table Name should not be empty");
     if (probe_table_aliases.count(tv_table_name) != 0U) {
       probe_table_cols_set.insert(col);
     }
@@ -202,14 +203,16 @@ void InputColumnDeriver::Visit(const InnerIndexJoin *op) {
 
 void InputColumnDeriver::Visit(const InnerNLJoin *op) { JoinHelper(op); }
 
-void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const LeftNLJoin *op) { TERRIER_ASSERT(0, "LeftNLJoin not supported"); }
+void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const LeftNLJoin *op) {
+  NOISEPAGE_ASSERT(0, "LeftNLJoin not supported");
+}
 
 void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const RightNLJoin *op) {
-  TERRIER_ASSERT(0, "RightNLJoin not supported");
+  NOISEPAGE_ASSERT(0, "RightNLJoin not supported");
 }
 
 void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const OuterNLJoin *op) {
-  TERRIER_ASSERT(0, "OuterNLJoin not supported");
+  NOISEPAGE_ASSERT(0, "OuterNLJoin not supported");
 }
 
 void InputColumnDeriver::Visit(const InnerHashJoin *op) { JoinHelper(op); }
@@ -219,11 +222,11 @@ void InputColumnDeriver::Visit(const LeftSemiHashJoin *op) { JoinHelper(op); }
 void InputColumnDeriver::Visit(const LeftHashJoin *op) { JoinHelper(op); }
 
 void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const RightHashJoin *op) {
-  TERRIER_ASSERT(0, "RightHashJoin not supported");
+  NOISEPAGE_ASSERT(0, "RightHashJoin not supported");
 }
 
 void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const OuterHashJoin *op) {
-  TERRIER_ASSERT(0, "OuterHashJoin not supported");
+  NOISEPAGE_ASSERT(0, "OuterHashJoin not supported");
 }
 
 void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const Insert *op) {
@@ -231,7 +234,12 @@ void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const Insert *op) {
   output_input_cols_ = std::make_pair(std::move(required_cols_), std::move(input));
 }
 
-void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const InsertSelect *op) { Passdown(); }
+void InputColumnDeriver::Visit(UNUSED_ATTRIBUTE const InsertSelect *op) {
+  // Push the output to the child select, the insert has no output
+  PT1 output;
+  auto input = PT2{required_cols_};
+  output_input_cols_ = std::make_pair(std::move(output), std::move(input));
+}
 
 void InputColumnDeriver::InputBaseTableColumns(const std::string &alias, catalog::db_oid_t db,
                                                catalog::table_oid_t tbl) {
@@ -410,7 +418,7 @@ void InputColumnDeriver::JoinHelper(const BaseOperatorNodeContents *op) {
     if (col->GetExpressionType() == parser::ExpressionType::COLUMN_VALUE) {
       tv_expr = col.CastManagedPointerTo<parser::ColumnValueExpression>();
     } else {
-      TERRIER_ASSERT(parser::ExpressionUtil::IsAggregateExpression(col), "col should be AggregateExpression");
+      NOISEPAGE_ASSERT(parser::ExpressionUtil::IsAggregateExpression(col), "col should be AggregateExpression");
 
       ExprSet tv_exprs;
       // Get the ColumnValueExpression used in the AggregateExpression
@@ -422,16 +430,16 @@ void InputColumnDeriver::JoinHelper(const BaseOperatorNodeContents *op) {
 
       // We get only the first ColumnValueExpression (should probably assert check this)
       tv_expr = (*(tv_exprs.begin())).CastManagedPointerTo<parser::ColumnValueExpression>();
-      TERRIER_ASSERT(tv_exprs.size() == 1, "Uh oh, multiple TVEs in AggregateExpression found");
+      NOISEPAGE_ASSERT(tv_exprs.size() == 1, "Uh oh, multiple TVEs in AggregateExpression found");
     }
 
     // Pick the build or probe side depending on the table
     std::string tv_table_name = tv_expr->GetTableName();
-    TERRIER_ASSERT(!tv_table_name.empty(), "Table Name should not be empty");
+    NOISEPAGE_ASSERT(!tv_table_name.empty(), "Table Name should not be empty");
     if (build_table_aliases.count(tv_table_name) != 0U) {
       build_table_cols_set.insert(col);
     } else {
-      TERRIER_ASSERT(probe_table_aliases.count(tv_table_name), "tv_expr should be against probe table");
+      NOISEPAGE_ASSERT(probe_table_aliases.count(tv_table_name), "tv_expr should be against probe table");
       probe_table_cols_set.insert(col);
     }
   }
@@ -463,4 +471,26 @@ void InputColumnDeriver::Passdown() {
   output_input_cols_ = std::make_pair(std::move(required_cols_), std::move(input));
 }
 
-}  // namespace terrier::optimizer
+void InputColumnDeriver::Visit(const Analyze *op) {
+  // Generate child's aggregate expressions
+  std::vector<common::ManagedPointer<parser::AbstractExpression>> aggregate_inputs;
+  // COUNT(*) - num rows
+  auto *count_rows = OptimizerUtil::GenerateStarAggregateExpr(parser::ExpressionType::AGGREGATE_COUNT, false);
+  aggregate_inputs.emplace_back(count_rows);
+  txn_->RegisterCommitAction([=]() { delete count_rows; });
+  txn_->RegisterAbortAction([=]() { delete count_rows; });
+  for (const auto &col_oid : op->GetColumns()) {
+    auto col = accessor_->GetSchema(op->GetTableOid()).GetColumn(col_oid);
+    for (const auto &col_info : catalog::postgres::PgStatisticImpl::ANALYZE_AGGREGATES) {
+      auto *agg_expr = OptimizerUtil::GenerateAggregateExpr(col, col_info.aggregate_type_, col_info.distinct_, "",
+                                                            op->GetDatabaseOid(), op->GetTableOid());
+      aggregate_inputs.emplace_back(agg_expr);
+      txn_->RegisterCommitAction([=]() { delete agg_expr; });
+      txn_->RegisterAbortAction([=]() { delete agg_expr; });
+    }
+  }
+  PT2 child_cols = PT2{aggregate_inputs};
+  output_input_cols_ = std::make_pair(std::move(required_cols_), std::move(child_cols));
+}
+
+}  // namespace noisepage::optimizer

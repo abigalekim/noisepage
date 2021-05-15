@@ -7,19 +7,19 @@
 #include "execution/compiler/pipeline.h"
 #include "execution/compiler/pipeline_driver.h"
 
-namespace terrier::catalog {
+namespace noisepage::catalog {
 class Schema;
-}  // namespace terrier::catalog
+}  // namespace noisepage::catalog
 
-namespace terrier::parser {
+namespace noisepage::parser {
 class AbstractExpression;
-}  // namespace terrier::parser
+}  // namespace noisepage::parser
 
-namespace terrier::planner {
+namespace noisepage::planner {
 class SeqScanPlanNode;
-}  // namespace terrier::planner
+}  // namespace noisepage::planner
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 class FunctionBuilder;
 
@@ -48,14 +48,12 @@ class SeqScanTranslator : public OperatorTranslator, public PipelineDriver {
   void DefineHelperFunctions(util::RegionVector<ast::FunctionDecl *> *decls) override;
 
   /**
-   * Initialize the counters.
-   */
-  void InitializeQueryState(FunctionBuilder *function) const override;
-
-  /**
    * Initialize the FilterManager if required.
    */
   void InitializePipelineState(const Pipeline &pipeline, FunctionBuilder *function) const override;
+
+  void InitializeCounters(const Pipeline &pipeline, FunctionBuilder *function) const override;
+  void RecordCounters(const Pipeline &pipeline, FunctionBuilder *function) const override;
 
   /**
    * Generate the scan.
@@ -63,9 +61,6 @@ class SeqScanTranslator : public OperatorTranslator, public PipelineDriver {
    * @param function The pipeline generating function.
    */
   void PerformPipelineWork(WorkContext *context, FunctionBuilder *function) const override;
-
-  /** Record the counters for Lin's models. */
-  void FinishPipelineWork(const Pipeline &pipeline, FunctionBuilder *function) const override;
 
   /**
    * Tear-down the FilterManager if required.
@@ -134,11 +129,11 @@ class SeqScanTranslator : public OperatorTranslator, public PipelineDriver {
   /** @return The index of the given column OID inside the col_oids that the plan is scanning over. */
   uint32_t GetColOidIndex(catalog::col_oid_t col_oid) const;
 
-  // The name of the declared TVI and VPI.
-  ast::Identifier tvi_var_;
-  ast::Identifier vpi_var_;
-  // The name of the col_oids that the plan wants to scan over.
-  ast::Identifier col_oids_var_;
+  StateDescriptor::Entry tvi_base_;        ///< The TVI is declared at pipeline setup/teardown.
+  StateDescriptor::Entry tvi_needs_free_;  ///< If true, \@tableIterClose(&tviBase) needs to be called.
+  ast::Identifier tvi_var_;                ///< If it exists, the name of the declared TVI. Holds a pointer to TVI base.
+  ast::Identifier vpi_var_;                ///< The VPI variable.
+  ast::Identifier col_oids_var_;           ///< The col_oids variable that the plan wants to scan over.
 
   ast::Identifier slot_var_;
 
@@ -156,4 +151,4 @@ class SeqScanTranslator : public OperatorTranslator, public PipelineDriver {
   StateDescriptor::Entry num_scans_;
 };
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

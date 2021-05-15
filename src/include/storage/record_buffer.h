@@ -6,11 +6,11 @@
 #include "common/strong_typedef.h"
 #include "storage/undo_record.h"
 
-namespace terrier::transaction {
+namespace noisepage::transaction {
 class TransactionManager;
-}  // namespace terrier::transaction
+}  // namespace noisepage::transaction
 
-namespace terrier::storage {
+namespace noisepage::storage {
 
 /**
  * A RecordBufferSegment is a piece of (reusable) memory used to hold undo records. The segment internally keeps track
@@ -36,7 +36,7 @@ class RecordBufferSegment {
    * @return pointer to the head of the allocated record
    */
   byte *Reserve(const uint32_t size) {
-    TERRIER_ASSERT(HasBytesLeft(size), "buffer segment allocation out of bounds");
+    NOISEPAGE_ASSERT(HasBytesLeft(size), "buffer segment allocation out of bounds");
     auto *result = bytes_ + size_;
     size_ += size;
     return result;
@@ -160,7 +160,7 @@ class RecordBufferSegmentAllocator {
    */
   RecordBufferSegment *New() {
     auto *result = new RecordBufferSegment;
-    TERRIER_ASSERT(reinterpret_cast<uintptr_t>(result) % 8 == 0, "buffer segments should be aligned to 8 bytes");
+    NOISEPAGE_ASSERT(reinterpret_cast<uintptr_t>(result) % 8 == 0, "buffer segments should be aligned to 8 bytes");
     return result;
   }
 
@@ -337,16 +337,18 @@ class RedoBuffer {
    * Reserve a redo record with the given size, in bytes. The returned pointer is guaranteed to be valid until NewEntry
    * is called again, or when the buffer is explicitly flushed by the call Finish().
    * @param size the size of the redo record to allocate
+   * @param policy The transaction-wide policies for this log.
    * @return a new redo record with at least the given size reserved
    */
-  byte *NewEntry(uint32_t size);
+  byte *NewEntry(uint32_t size, const transaction::TransactionPolicy &policy);
 
   /**
    * Flush all contents of the redo buffer to be logged out, effectively closing this redo buffer. No further entries
    * can be written to this redo buffer after the function returns.
    * @param flush_buffer whether the transaction holding this RedoBuffer should flush the its redo buffer
+   * @param policy The transaction-wide policies for this log.
    */
-  void Finalize(bool flush_buffer);
+  void Finalize(bool flush_buffer, const transaction::TransactionPolicy &policy);
 
   /**
    * @return a pointer to the beginning of the last record requested, or nullptr if no record exists.
@@ -377,4 +379,4 @@ class RedoBuffer {
   // reserved for aborts where we will potentially need to garbage collect the last operation (which caused the abort)
   byte *last_record_ = nullptr;
 };
-}  // namespace terrier::storage
+}  // namespace noisepage::storage

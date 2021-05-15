@@ -5,12 +5,12 @@
 #include <string>
 #include <vector>
 
-#include "csv/csv.h"  // NOLINT
+#include "csv/csv.hpp"  // NOLINT
 #include "execution/sql/value.h"
 #include "storage/index/index.h"
 #include "storage/sql_table.h"
 
-namespace terrier::execution::sql {
+namespace noisepage::execution::sql {
 
 uint32_t TableReader::ReadTable(const std::string &schema_file, const std::string &data_file) {
   uint32_t val_written = 0;
@@ -87,7 +87,8 @@ void TableReader::CreateIndexes(TableInfo *info, catalog::table_oid_t table_oid)
   storage::index::IndexBuilder index_builder;
   for (auto &index_info : info->indexes_) {
     // Create index in catalog
-    catalog::IndexSchema tmp_schema{index_info->cols_, storage::index::IndexType::BWTREE, false, false, false, false};
+    catalog::IndexSchema tmp_schema{
+        index_info->cols_, storage::index::IndexType::BPLUSTREE, false, false, false, false};
     auto index_oid = exec_ctx_->GetAccessor()->CreateIndex(ns_oid_, table_oid, index_info->index_name_, tmp_schema);
     auto &schema = exec_ctx_->GetAccessor()->GetIndexSchema(index_oid);
 
@@ -160,7 +161,7 @@ void TableReader::WriteTableCol(storage::ProjectedRow *insert_pr, uint16_t col_o
       std::memcpy(insert_offset, &val, sizeof(int64_t));
       break;
     }
-    case type::TypeId::DECIMAL: {
+    case type::TypeId::REAL: {
       auto val = field->get<double>();
       std::memcpy(insert_offset, &val, sizeof(double));
       break;
@@ -190,4 +191,4 @@ void TableReader::WriteTableCol(storage::ProjectedRow *insert_pr, uint16_t col_o
   }
 }
 
-}  // namespace terrier::execution::sql
+}  // namespace noisepage::execution::sql

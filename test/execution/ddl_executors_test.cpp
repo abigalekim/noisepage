@@ -22,12 +22,12 @@
 #include "transaction/transaction_manager.h"
 #include "transaction/transaction_util.h"
 
-namespace terrier::execution::sql::test {
+namespace noisepage::execution::sql::test {
 
 class DDLExecutorsTests : public TerrierTest {
  public:
   void SetUp() override {
-    db_main_ = terrier::DBMain::Builder().SetUseGC(true).SetUseCatalog(true).Build();
+    db_main_ = noisepage::DBMain::Builder().SetUseGC(true).SetUseCatalog(true).Build();
     catalog_ = db_main_->GetCatalogLayer()->GetCatalog();
     txn_manager_ = db_main_->GetTransactionLayer()->GetTransactionManager();
     block_store_ = db_main_->GetStorageLayer()->GetBlockStore();
@@ -46,7 +46,7 @@ class DDLExecutorsTests : public TerrierTest {
                                                        catalog::col_oid_t(1)));
     StorageTestUtil::ForceOid(&(keycols[0]), catalog::indexkeycol_oid_t(1));
     index_schema_ =
-        std::make_unique<catalog::IndexSchema>(keycols, storage::index::IndexType::BWTREE, true, true, false, true);
+        std::make_unique<catalog::IndexSchema>(keycols, storage::index::IndexType::BPLUSTREE, true, true, false, true);
 
     txn_ = txn_manager_->BeginTransaction();
     accessor_ = catalog_->GetAccessor(common::ManagedPointer(txn_), db_, DISABLED);
@@ -331,4 +331,4 @@ TEST_F(DDLExecutorsTests, DropTablePlanNode) {
   txn_manager_->Commit(txn_, transaction::TransactionUtil::EmptyCallback, nullptr);
 }
 
-}  // namespace terrier::execution::sql::test
+}  // namespace noisepage::execution::sql::test

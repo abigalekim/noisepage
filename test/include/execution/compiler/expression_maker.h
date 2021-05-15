@@ -19,7 +19,7 @@
 #include "parser/expression/parameter_value_expression.h"
 #include "parser/expression/star_expression.h"
 
-namespace terrier::execution::compiler::test {
+namespace noisepage::execution::compiler::test {
 
 /**
  * Helper class to reduce typing and increase readability when hand crafting expressions.
@@ -54,7 +54,7 @@ class ExpressionMaker {
    */
   ManagedExpression Constant(double val) {
     return MakeManaged(
-        std::make_unique<parser::ConstantValueExpression>(type::TypeId::DECIMAL, execution::sql::Real(val)));
+        std::make_unique<parser::ConstantValueExpression>(type::TypeId::REAL, execution::sql::Real(val)));
   }
 
   /**
@@ -309,4 +309,4 @@ class ExpressionMaker {
   std::vector<OwnedExpression> owned_exprs_;
   std::vector<OwnedAggExpression> owned_agg_exprs_;
 };
-}  // namespace terrier::execution::compiler::test
+}  // namespace noisepage::execution::compiler::test

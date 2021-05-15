@@ -14,7 +14,7 @@
 #include "test_util/test_harness.h"
 #include "test_util/tpcc/tpcc_plan_test.h"
 
-namespace terrier {
+namespace noisepage {
 
 struct TpccPlanDeliveryTests : public TpccPlanTest {};
 
@@ -301,8 +301,7 @@ TEST_F(TpccPlanDeliveryTests, UpdateCustomBalanceDeliveryCount) {
       EXPECT_EQ(update->GetSetClauses()[idx].first, update_oids[idx]);
       auto expr = update->GetSetClauses()[idx].second;
       EXPECT_EQ(expr->GetExpressionType(), parser::ExpressionType::OPERATOR_PLUS);
-      auto dve = expr->GetChild(0).CastManagedPointerTo<parser::ColumnValueExpression>();
-      EXPECT_EQ(dve->GetColumnOid(), update_oids[idx]);
+      EXPECT_EQ(expr->GetChild(0)->GetExpressionType(), parser::ExpressionType::VALUE_TUPLE);
 
       auto cve = expr->GetChild(1).CastManagedPointerTo<parser::ConstantValueExpression>();
       EXPECT_EQ(cve->Peek<int64_t>(), 1);
@@ -341,4 +340,4 @@ TEST_F(TpccPlanDeliveryTests, UpdateCustomBalanceDeliveryCount) {
   OptimizeUpdate(query, tbl_customer_, check);
 }
 
-}  // namespace terrier
+}  // namespace noisepage

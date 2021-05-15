@@ -11,8 +11,8 @@
 #include "common/settings.h"
 #include "gtest/gtest.h"
 #include "network/connection_handle_factory.h"
+#include "network/noisepage_server.h"
 #include "network/postgres/postgres_protocol_interpreter.h"
-#include "network/terrier_server.h"
 #include "storage/garbage_collector.h"
 #include "test_util/manual_packet_util.h"
 #include "test_util/test_harness.h"
@@ -20,7 +20,7 @@
 #include "transaction/deferred_action_manager.h"
 #include "transaction/transaction_manager.h"
 
-namespace terrier::network {
+namespace noisepage::network {
 
 /*
  * The network tests does not check whether the result is correct. It only checks if the network layer works.
@@ -63,7 +63,7 @@ class NetworkTests : public TerrierTest {
     deferred_action_manager_ = new transaction::DeferredActionManager(common::ManagedPointer(timestamp_manager_));
     txn_manager_ = new transaction::TransactionManager(common::ManagedPointer(timestamp_manager_),
                                                        common::ManagedPointer(deferred_action_manager_),
-                                                       common::ManagedPointer(&buffer_pool_), true, DISABLED);
+                                                       common::ManagedPointer(&buffer_pool_), true, false, DISABLED);
     gc_ = new storage::GarbageCollector(common::ManagedPointer(timestamp_manager_),
                                         common::ManagedPointer(deferred_action_manager_),
                                         common::ManagedPointer(txn_manager_), DISABLED);
@@ -72,14 +72,16 @@ class NetworkTests : public TerrierTest {
                                     common::ManagedPointer(gc_));
 
     tcop_ = new trafficcop::TrafficCop(common::ManagedPointer(txn_manager_), common::ManagedPointer(catalog_), DISABLED,
-                                       DISABLED, DISABLED, 0, false, execution::vm::ExecutionMode::Interpret);
+                                       DISABLED, DISABLED, DISABLED, 0, false, execution::vm::ExecutionMode::Interpret);
 
     auto txn = txn_manager_->BeginTransaction();
     catalog_->CreateDatabase(common::ManagedPointer(txn), catalog::DEFAULT_DATABASE, true);
     txn_manager_->Commit(txn, transaction::TransactionUtil::EmptyCallback, nullptr);
 
+#if NOISEPAGE_USE_LOGGER
     network_logger->set_level(spdlog::level::info);
     spdlog::flush_every(std::chrono::seconds(1));
+#endif
 
     try {
       handle_factory_ = std::make_unique<ConnectionHandleFactory>(common::ManagedPointer(tcop_));
@@ -399,4 +401,4 @@ TEST_F(NetworkTests, GusThesisSaver) {
   NETWORK_LOG_INFO("[GusThesisSaver] Completed");
 }
 
-}  // namespace terrier::network
+}  // namespace noisepage::network

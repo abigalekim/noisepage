@@ -8,11 +8,11 @@
 #include "execution/compiler/pipeline.h"
 #include "execution/compiler/pipeline_driver.h"
 
-namespace terrier::planner {
+namespace noisepage::planner {
 class AggregatePlanNode;
-}  // namespace terrier::planner
+}  // namespace noisepage::planner
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 class FunctionBuilder;
 
@@ -49,6 +49,13 @@ class StaticAggregationTranslator : public OperatorTranslator, public PipelineDr
    * @param function The function being built.
    */
   void InitializePipelineState(const Pipeline &pipeline, FunctionBuilder *function) const override;
+
+  /**
+   * Tear-down and destroy the thread-local aggregators, if needed.
+   * @param pipeline Current pipeline.
+   * @param function The pipeline generating function.
+   */
+  void TearDownPipelineState(const Pipeline &pipeline, FunctionBuilder *function) const override;
 
   /**
    * Initialize the global aggregation hash table.
@@ -99,6 +106,10 @@ class StaticAggregationTranslator : public OperatorTranslator, public PipelineDr
     UNREACHABLE("Static aggregations do not produce columns from base tables.");
   }
 
+  void InitializeCounters(const Pipeline &pipeline, FunctionBuilder *function) const override;
+  void RecordCounters(const Pipeline &pipeline, FunctionBuilder *function) const override;
+  void EndParallelPipelineWork(const Pipeline &pipeline, FunctionBuilder *function) const override;
+
  private:
   // Access the plan.
   const planner::AggregatePlanNode &GetAggPlan() const { return GetPlanAs<planner::AggregatePlanNode>(); }
@@ -121,7 +132,7 @@ class StaticAggregationTranslator : public OperatorTranslator, public PipelineDr
   ast::StructDecl *GetStructDecl() const { return struct_decl_; }
 
  private:
-  friend class brain::OperatingUnitRecorder;
+  friend class selfdriving::OperatingUnitRecorder;
 
   ast::Identifier agg_row_var_;
   ast::Identifier agg_payload_type_;
@@ -149,4 +160,4 @@ class StaticAggregationTranslator : public OperatorTranslator, public PipelineDr
   StateDescriptor::Entry num_agg_outputs_;
 };
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

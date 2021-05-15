@@ -14,7 +14,7 @@
 
 #include "common/macros.h"
 
-namespace terrier::common {
+namespace noisepage::common {
 /**
  * Wrapper around hw perf events provided by the Linux kernel. Instantiating and destroying PerfMonitors are a bit
  * expensive because they open multiple file descriptors (read: syscalls). Ideally you want to keep a PerfMonitor object
@@ -61,8 +61,12 @@ class PerfMonitor {
     // uint64_t branch_misses_;
     /**
      * Bus cycles, which can be different from total cycles.
+     *
+     * TODO(wz2): Dated Nov 5th, 2020 on dev4. Recording {cycle,instr,cache-ref,cache-miss,bus,ref-cpu} causes all
+     * the counters to get zeroed. This counter currently isn't exposed to the rest of the system so it is disabled
+     * pending further investigation. Possibly might be related to limited intel performance counters per core.
      */
-    uint64_t bus_cycles_;
+    // uint64_t bus_cycles_;
     /**
      * Total cycles; not affected by CPU frequency scaling.
      */
@@ -80,7 +84,7 @@ class PerfMonitor {
       this->cache_misses_ -= rhs.cache_misses_;
       // this->branch_instructions_ -= rhs.branch_instructions_;
       // this->branch_misses_ -= rhs.branch_misses_;
-      this->bus_cycles_ -= rhs.bus_cycles_;
+      // this->bus_cycles_ -= rhs.bus_cycles_;
       this->ref_cpu_cycles_ -= rhs.ref_cpu_cycles_;
       return *this;
     }
@@ -142,7 +146,7 @@ class PerfMonitor {
       // Iterate through all of the events' file descriptors and close them
       for (const auto i : event_files_) {
         const auto result UNUSED_ATTRIBUTE = close(i);
-        TERRIER_ASSERT(result == 0, "Failed to close perf_event.");
+        NOISEPAGE_ASSERT(result == 0, "Failed to close perf_event.");
       }
     }
   }
@@ -161,17 +165,17 @@ class PerfMonitor {
         // Iterate through all of the events' file descriptors resetting and starting them
         for (const auto i : event_files_) {
           auto result UNUSED_ATTRIBUTE = ioctl(i, PERF_EVENT_IOC_RESET);
-          TERRIER_ASSERT(result >= 0, "Failed to reset events.");
+          NOISEPAGE_ASSERT(result >= 0, "Failed to reset events.");
           result = ioctl(i, PERF_EVENT_IOC_ENABLE);
-          TERRIER_ASSERT(result >= 0, "Failed to enable events.");
+          NOISEPAGE_ASSERT(result >= 0, "Failed to enable events.");
         }
       } else {  // NOLINT
         // Reset all of the counters out with a single syscall.
         auto result UNUSED_ATTRIBUTE = ioctl(event_files_[0], PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
-        TERRIER_ASSERT(result >= 0, "Failed to reset events.");
+        NOISEPAGE_ASSERT(result >= 0, "Failed to reset events.");
         // Start all of the counters out with a single syscall.
         result = ioctl(event_files_[0], PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
-        TERRIER_ASSERT(result >= 0, "Failed to enable events.");
+        NOISEPAGE_ASSERT(result >= 0, "Failed to enable events.");
       }
       running_ = true;
     }
@@ -186,17 +190,17 @@ class PerfMonitor {
     // do nothing
 #else
     if (valid_) {
-      TERRIER_ASSERT(running_, "StopEvents() called without StartEvents() first.");
+      NOISEPAGE_ASSERT(running_, "StopEvents() called without StartEvents() first.");
       if constexpr (inherit) {  // NOLINT
         // Iterate through all of the events' file descriptors stopping them
         for (const auto i : event_files_) {
           auto result UNUSED_ATTRIBUTE = ioctl(i, PERF_EVENT_IOC_DISABLE);
-          TERRIER_ASSERT(result >= 0, "Failed to disable events.");
+          NOISEPAGE_ASSERT(result >= 0, "Failed to disable events.");
         }
       } else {  // NOLINT
         // Stop all of the counters out with a single syscall.
         auto result UNUSED_ATTRIBUTE = ioctl(event_files_[0], PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP);
-        TERRIER_ASSERT(result >= 0, "Failed to disable events.");
+        NOISEPAGE_ASSERT(result >= 0, "Failed to disable events.");
       }
       running_ = false;
     }
@@ -214,27 +218,24 @@ class PerfMonitor {
         // Iterate through all of the events' file descriptors reading them
 
         auto bytes_read UNUSED_ATTRIBUTE = read(event_files_[0], &counters.cpu_cycles_, sizeof(uint64_t));
-        TERRIER_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
+        NOISEPAGE_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
 
         bytes_read = read(event_files_[1], &counters.instructions_, sizeof(uint64_t));
-        TERRIER_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
+        NOISEPAGE_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
 
         bytes_read = read(event_files_[2], &counters.cache_references_, sizeof(uint64_t));
-        TERRIER_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
+        NOISEPAGE_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
 
         bytes_read = read(event_files_[3], &counters.cache_misses_, sizeof(uint64_t));
-        TERRIER_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
+        NOISEPAGE_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
 
-        bytes_read = read(event_files_[4], &counters.bus_cycles_, sizeof(uint64_t));
-        TERRIER_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
-
-        bytes_read = read(event_files_[5], &counters.ref_cpu_cycles_, sizeof(uint64_t));
-        TERRIER_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
+        bytes_read = read(event_files_[4], &counters.ref_cpu_cycles_, sizeof(uint64_t));
+        NOISEPAGE_ASSERT(bytes_read == sizeof(uint64_t), "Failed to read the counter.");
       } else {  // NOLINT
         // Read all of the counters out with a single syscall.
         auto bytes_read UNUSED_ATTRIBUTE = read(event_files_[0], &counters, sizeof(PerfCounters));
-        TERRIER_ASSERT(bytes_read == sizeof(PerfCounters), "Failed to read the counters.");
-        TERRIER_ASSERT(counters.num_counters_ == NUM_HW_EVENTS, "Failed to read the counters.");
+        NOISEPAGE_ASSERT(bytes_read == sizeof(PerfCounters), "Failed to read the counters.");
+        NOISEPAGE_ASSERT(counters.num_counters_ == NUM_HW_EVENTS, "Failed to read the counters.");
       }
     }
     return counters;
@@ -243,7 +244,7 @@ class PerfMonitor {
   /**
    * Number of currently enabled HW perf events. Update this if more are added.
    */
-  static constexpr uint8_t NUM_HW_EVENTS = 6;
+  static constexpr uint8_t NUM_HW_EVENTS = 5;
 
  private:
   // set the first file descriptor to -1. Since event_files[0] is always passed into group_fd on
@@ -258,8 +259,8 @@ class PerfMonitor {
 
   bool running_ = false;
   static constexpr std::array<uint64_t, NUM_HW_EVENTS> HW_EVENTS{
-      PERF_COUNT_HW_CPU_CYCLES,   PERF_COUNT_HW_INSTRUCTIONS, PERF_COUNT_HW_CACHE_REFERENCES,
-      PERF_COUNT_HW_CACHE_MISSES, PERF_COUNT_HW_BUS_CYCLES,   PERF_COUNT_HW_REF_CPU_CYCLES};
+      PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS, PERF_COUNT_HW_CACHE_REFERENCES, PERF_COUNT_HW_CACHE_MISSES,
+      PERF_COUNT_HW_REF_CPU_CYCLES};
 #endif
 };
-}  // namespace terrier::common
+}  // namespace noisepage::common

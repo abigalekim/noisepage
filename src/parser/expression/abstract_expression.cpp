@@ -19,9 +19,10 @@
 #include "parser/expression/parameter_value_expression.h"
 #include "parser/expression/star_expression.h"
 #include "parser/expression/subquery_expression.h"
+#include "parser/expression/table_star_expression.h"
 #include "parser/expression/type_cast_expression.h"
 
-namespace terrier::parser {
+namespace noisepage::parser {
 
 void AbstractExpression::SetMutableStateForCopy(const AbstractExpression &copy_expr) {
   SetExpressionName(copy_expr.GetExpressionName());
@@ -76,7 +77,7 @@ void AbstractExpression::SetChild(int index, common::ManagedPointer<AbstractExpr
 
 nlohmann::json AbstractExpression::ToJson() const {
   nlohmann::json j;
-  j["expression_type"] = expression_type_;
+  j["expression_type"] = ExpressionTypeToString(expression_type_);
   j["expression_name"] = expression_name_;
   j["alias"] = alias_;
   j["depth"] = depth_;
@@ -94,7 +95,7 @@ nlohmann::json AbstractExpression::ToJson() const {
 std::vector<std::unique_ptr<AbstractExpression>> AbstractExpression::FromJson(const nlohmann::json &j) {
   std::vector<std::unique_ptr<AbstractExpression>> result_exprs;
 
-  expression_type_ = j.at("expression_type").get<ExpressionType>();
+  expression_type_ = ExpressionTypeFromString(j.at("expression_type").get<std::string>());
   expression_name_ = j.at("expression_name").get<std::string>();
   alias_ = j.at("alias").get<std::string>();
   return_value_type_ = j.at("return_value_type").get<type::TypeId>();
@@ -120,13 +121,15 @@ std::vector<std::unique_ptr<AbstractExpression>> AbstractExpression::FromJson(co
 JSONDeserializeExprIntermediate DeserializeExpression(const nlohmann::json &j) {
   std::unique_ptr<AbstractExpression> expr;
 
-  auto expression_type = j.at("expression_type").get<ExpressionType>();
+  auto expression_type = ExpressionTypeFromString(j.at("expression_type").get<std::string>());
   switch (expression_type) {
     case ExpressionType::AGGREGATE_COUNT:
     case ExpressionType::AGGREGATE_SUM:
     case ExpressionType::AGGREGATE_MIN:
     case ExpressionType::AGGREGATE_MAX:
-    case ExpressionType::AGGREGATE_AVG: {
+    case ExpressionType::AGGREGATE_AVG:
+    case ExpressionType::AGGREGATE_TOP_K:
+    case ExpressionType::AGGREGATE_HISTOGRAM: {
       expr = std::make_unique<AggregateExpression>();
       break;
     }
@@ -195,6 +198,11 @@ JSONDeserializeExprIntermediate DeserializeExpression(const nlohmann::json &j) {
       break;
     }
 
+    case ExpressionType::TABLE_STAR: {
+      expr = std::make_unique<TableStarExpression>();
+      break;
+    }
+
     case ExpressionType::ROW_SUBQUERY: {
       expr = std::make_unique<SubqueryExpression>();
       break;
@@ -257,4 +265,4 @@ void AbstractExpression::DeriveExpressionName() {
 
 DEFINE_JSON_BODY_DECLARATIONS(AbstractExpression);
 
-}  // namespace terrier::parser
+}  // namespace noisepage::parser

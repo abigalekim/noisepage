@@ -6,13 +6,15 @@
 
 #include "optimizer/abstract_optimizer.h"
 #include "optimizer/cost_model/abstract_cost_model.h"
+#include "optimizer/optimize_result.h"
 #include "optimizer/optimizer_context.h"
 #include "optimizer/property_set.h"
 
-namespace terrier {
+namespace noisepage {
 
 namespace planner {
 class AbstractPlanNode;
+class PlanMetaData;
 }  // namespace planner
 
 namespace catalog {
@@ -26,6 +28,7 @@ class TransactionContext;
 namespace optimizer {
 
 class OperatorNode;
+class PlanGenerator;
 
 /**
  * Optimizer class that implements the AbstractOptimizer abstract class
@@ -54,12 +57,13 @@ class Optimizer : public AbstractOptimizer {
    * @param storage StatsStorage
    * @param query_info Information about the query
    * @param op_tree Logical operator tree for execution
+   * @param parameters parameters for the query, can be nullptr if there are no parameters
    * @returns execution plan
    */
-  std::unique_ptr<planner::AbstractPlanNode> BuildPlanTree(transaction::TransactionContext *txn,
-                                                           catalog::CatalogAccessor *accessor, StatsStorage *storage,
-                                                           QueryInfo query_info,
-                                                           std::unique_ptr<AbstractOptimizerNode> op_tree) override;
+  std::unique_ptr<OptimizeResult> BuildPlanTree(
+      transaction::TransactionContext *txn, catalog::CatalogAccessor *accessor, StatsStorage *storage,
+      QueryInfo query_info, std::unique_ptr<AbstractOptimizerNode> op_tree,
+      common::ManagedPointer<std::vector<parser::ConstantValueExpression>> parameters) override;
 
   /**
    * Reset the optimizer state
@@ -83,12 +87,13 @@ class Optimizer : public AbstractOptimizer {
    * @param id ID of the group to produce the best physical operator
    * @param requirements Set of properties produced operator tree must satisfy
    * @param required_cols AbstractExpression tree output columns group must generate
+   * @param plan_generator Plan generator
    * @returns Lowest cost plan
    */
   std::unique_ptr<planner::AbstractPlanNode> ChooseBestPlan(
       transaction::TransactionContext *txn, catalog::CatalogAccessor *accessor, group_id_t id,
-      PropertySet *required_props,
-      const std::vector<common::ManagedPointer<parser::AbstractExpression>> &required_cols);
+      PropertySet *required_props, const std::vector<common::ManagedPointer<parser::AbstractExpression>> &required_cols,
+      PlanGenerator *plan_generator);
 
   /**
    * Execute elements of given optimization task stack and ensure that we
@@ -107,4 +112,4 @@ class Optimizer : public AbstractOptimizer {
 };
 
 }  // namespace optimizer
-}  // namespace terrier
+}  // namespace noisepage

@@ -1,6 +1,6 @@
 #pragma once
 
-namespace terrier::metrics {
+namespace noisepage::metrics {
 
 /**
  * Metric types
@@ -16,6 +16,18 @@ enum class MetricsComponent : uint8_t {
   QUERY_TRACE,
 };
 
+/**
+ * Metric output types
+ *
+ * IF you change this enum, you must change settings_defs.h
+ */
+enum class MetricsOutput : uint8_t {
+  NONE = 0,
+  CSV,
+  DB,
+  CSV_AND_DB,
+};
+
 constexpr uint8_t NUM_COMPONENTS = 8;
 
-}  // namespace terrier::metrics
+}  // namespace noisepage::metrics

@@ -6,21 +6,21 @@
 #include "common/managed_pointer.h"
 #include "storage/storage_defs.h"
 
-namespace terrier::catalog {
+namespace noisepage::catalog {
 class DatabaseCatalog;
 class IndexSchema;
 class Schema;
-}  // namespace terrier::catalog
+}  // namespace noisepage::catalog
 
-namespace terrier::storage {
+namespace noisepage::storage {
 class GarbageCollector;
-}  // namespace terrier::storage
+}  // namespace noisepage::storage
 
-namespace terrier::storage::index {
+namespace noisepage::storage::index {
 class Index;
-}  // namespace terrier::storage::index
+}  // namespace noisepage::storage::index
 
-namespace terrier::catalog::postgres {
+namespace noisepage::catalog::postgres {
 /**
  * Helper class for building tables and indexes for postgres catalog.
  */
@@ -92,6 +92,11 @@ class Builder {
    * @return schema object for pg_proc table
    */
   static Schema GetProcTableSchema();
+
+  /**
+   * @return schema object for pg_statistic table
+   */
+  static Schema GetStatisticTableSchema();
 
   /**
    * @param db oid in which the indexed table exists
@@ -226,6 +231,12 @@ class Builder {
   static IndexSchema GetProcNameIndexSchema(db_oid_t db);
 
   /**
+   * @param db oid in which the indexed table exists
+   * @return schema object for the table/oid index on pg_statistic
+   */
+  static IndexSchema GetStatisticOidIndexSchema(db_oid_t db);
+
+  /**
    * Instantiate a new unique index with the given schema and oid
    * @param key_schema for the index
    * @param oid for the new index
@@ -241,4 +252,4 @@ class Builder {
    */
   static storage::index::Index *BuildLookupIndex(const IndexSchema &key_schema, index_oid_t oid);
 };
-}  // namespace terrier::catalog::postgres
+}  // namespace noisepage::catalog::postgres

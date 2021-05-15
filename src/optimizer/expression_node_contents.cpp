@@ -12,7 +12,7 @@
 #include "parser/expression_defs.h"
 #include "transaction/transaction_context.h"
 
-namespace terrier::optimizer {
+namespace noisepage::optimizer {
 
 common::ManagedPointer<parser::AbstractExpression> ExpressionNodeContents::CopyWithChildren(
     std::vector<std::unique_ptr<parser::AbstractExpression>> children) {
@@ -72,10 +72,12 @@ common::ManagedPointer<parser::AbstractExpression> ExpressionNodeContents::CopyW
     case parser::ExpressionType::AGGREGATE_SUM:
     case parser::ExpressionType::AGGREGATE_MIN:
     case parser::ExpressionType::AGGREGATE_MAX:
-    case parser::ExpressionType::AGGREGATE_AVG: {
+    case parser::ExpressionType::AGGREGATE_AVG:
+    case parser::ExpressionType::AGGREGATE_TOP_K:
+    case parser::ExpressionType::AGGREGATE_HISTOGRAM: {
       // Unfortunately, the aggregate expression (also applies to function) may
       // already have extra state information created due to the binder.
-      // Under terrier's desgn, we decide to just copy() the node and then
+      // Under noisepage's design, we decide to just copy() the node and then
       // install the child.
       auto expr_copy = expr_->Copy();
       if (children.size() == 1) {
@@ -131,4 +133,4 @@ common::ManagedPointer<parser::AbstractExpression> ExpressionNodeContents::CopyW
 }
 
 void ExpressionNodeContents::Accept(common::ManagedPointer<OperatorVisitor> v) const { (void)v; }
-}  // namespace terrier::optimizer
+}  // namespace noisepage::optimizer

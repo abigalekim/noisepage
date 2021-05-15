@@ -1,6 +1,6 @@
 #include "storage/index/generic_key.h"
 
-namespace terrier::storage::index {
+namespace noisepage::storage::index {
 
 /**
  * @param type_id TypeId to interpret both pointers as
@@ -33,4 +33,4 @@ bool GenericKey::CompareEquals(const type::TypeId type_id, const byte *const lhs
   return false;
 }
 
-}  // namespace terrier::storage::index
+}  // namespace noisepage::storage::index

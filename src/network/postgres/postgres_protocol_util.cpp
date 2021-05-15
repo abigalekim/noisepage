@@ -4,7 +4,7 @@
 
 #include "loggers/network_logger.h"
 
-namespace terrier::network {
+namespace noisepage::network {
 
 type::TypeId PostgresProtocolUtil::PostgresValueTypeToInternalValueType(const PostgresValueType type) {
   switch (type) {
@@ -21,9 +21,8 @@ type::TypeId PostgresProtocolUtil::PostgresValueTypeToInternalValueType(const Po
     case PostgresValueType::BIGINT:
       return type::TypeId::BIGINT;
     case PostgresValueType::REAL:
-      return type::TypeId::DECIMAL;
     case PostgresValueType::DOUBLE:
-      return type::TypeId::DECIMAL;
+      return type::TypeId::REAL;
 
     case PostgresValueType::BPCHAR:
     case PostgresValueType::BPCHAR2:
@@ -71,8 +70,11 @@ PostgresValueType PostgresProtocolUtil::InternalValueTypeToPostgresValueType(con
     case type::TypeId::BIGINT:
       return PostgresValueType::BIGINT;
 
-    case type::TypeId::DECIMAL:
+    case type::TypeId::REAL:
       return PostgresValueType::DOUBLE;
+
+    case type::TypeId::DECIMAL:
+      return PostgresValueType::DECIMAL;
 
     case type::TypeId::TIMESTAMP:
       return PostgresValueType::TIMESTAMPS;
@@ -81,7 +83,8 @@ PostgresValueType PostgresProtocolUtil::InternalValueTypeToPostgresValueType(con
       return PostgresValueType::DATE;
 
     case type::TypeId::VARCHAR:
-      return PostgresValueType::VARCHAR2;
+      return PostgresValueType::VARCHAR2;  // TODO(Matt): should this just be VARCHAR? VARCHAR2 is an Postgres-Oracle
+                                           // compatibility thing
 
     case type::TypeId::VARBINARY:
       return PostgresValueType::VARBINARY;
@@ -94,4 +97,4 @@ PostgresValueType PostgresProtocolUtil::InternalValueTypeToPostgresValueType(con
   }
 }
 
-}  // namespace terrier::network
+}  // namespace noisepage::network

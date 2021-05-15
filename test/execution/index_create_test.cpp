@@ -4,7 +4,7 @@
 #include "execution/sql/table_vector_iterator.h"
 #include "execution/sql_test.h"
 #include "planner/plannodes/create_index_plan_node.h"
-namespace terrier::execution::sql::test {
+namespace noisepage::execution::sql::test {
 
 class IndexCreateTest : public SqlBasedTest {
   void SetUp() override {
@@ -106,7 +106,7 @@ TEST_F(IndexCreateTest, SimpleIndexCreate) {
   parser::ColumnValueExpression col_expr(table_oid, table_col.Oid(), table_col.Type());
   index_cols.emplace_back("index_colA", type::TypeId::INTEGER, false, col_expr);
 
-  catalog::IndexSchema tmp_index_schema{index_cols, storage::index::IndexType::BWTREE, false, false, false, false};
+  catalog::IndexSchema tmp_index_schema{index_cols, storage::index::IndexType::BPLUSTREE, false, false, false, false};
 
   CreateIndex(table_oid, "indexA", std::make_unique<catalog::IndexSchema>(tmp_index_schema));
 
@@ -126,7 +126,7 @@ TEST_F(IndexCreateTest, SimpleIndexCreate2) {
   parser::ColumnValueExpression col_expr(table_oid, table_col.Oid(), table_col.Type());
   index_cols.emplace_back("index_colE", type::TypeId::INTEGER, false, col_expr);
 
-  catalog::IndexSchema tmp_index_schema{index_cols, storage::index::IndexType::BWTREE, false, false, false, false};
+  catalog::IndexSchema tmp_index_schema{index_cols, storage::index::IndexType::BPLUSTREE, false, false, false, false};
 
   CreateIndex(table_oid, "indexE", std::make_unique<catalog::IndexSchema>(tmp_index_schema));
 
@@ -150,7 +150,7 @@ TEST_F(IndexCreateTest, MultiColumnIndexCreate) {
   parser::ColumnValueExpression col_expr_b(table_oid, table_col_b.Oid(), table_col_b.Type());
   index_cols.emplace_back("index_colB", type::TypeId::INTEGER, false, col_expr_b);
 
-  catalog::IndexSchema tmp_index_schema{index_cols, storage::index::IndexType::BWTREE, false, false, false, false};
+  catalog::IndexSchema tmp_index_schema{index_cols, storage::index::IndexType::BPLUSTREE, false, false, false, false};
 
   CreateIndex(table_oid, "indexAB", std::make_unique<catalog::IndexSchema>(tmp_index_schema));
 
@@ -158,4 +158,4 @@ TEST_F(IndexCreateTest, MultiColumnIndexCreate) {
   VerifyIndexResult(table_oid, "indexAB", {1, 2, 3, 4}, 2);
 }
 
-}  // namespace terrier::execution::sql::test
+}  // namespace noisepage::execution::sql::test

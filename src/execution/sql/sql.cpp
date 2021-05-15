@@ -2,11 +2,12 @@
 
 #include <string>
 
+#include "common/error/error_code.h"
 #include "common/error/exception.h"
 #include "spdlog/fmt/fmt.h"
 #include "type/type_id.h"
 
-namespace terrier::execution::sql {
+namespace noisepage::execution::sql {
 
 // static
 SqlTypeId GetSqlTypeFromInternalType(TypeId type) {
@@ -139,6 +140,7 @@ bool IsTypeIntegral(TypeId type) {
     case TypeId::Float:
     case TypeId::Double:
     case TypeId::Date:
+    case TypeId::Timestamp:
     case TypeId::Varchar:
     case TypeId::Varbinary:
       return false;
@@ -160,6 +162,7 @@ bool IsTypeFloatingPoint(TypeId type) {
     case TypeId::Hash:
     case TypeId::Pointer:
     case TypeId::Date:
+    case TypeId::Timestamp:
     case TypeId::Varchar:
     case TypeId::Varbinary:
       return false;
@@ -245,7 +248,7 @@ TypeId GetTypeId(type::TypeId frontend_type) {
     case type::TypeId::BIGINT:
       execution_type_id = execution::sql::TypeId::BigInt;
       break;
-    case type::TypeId::DECIMAL:
+    case type::TypeId::REAL:
       execution_type_id = execution::sql::TypeId::Double;
       break;
     case type::TypeId::TIMESTAMP:
@@ -268,4 +271,4 @@ TypeId GetTypeId(type::TypeId frontend_type) {
   return execution_type_id;
 }
 
-}  // namespace terrier::execution::sql
+}  // namespace noisepage::execution::sql

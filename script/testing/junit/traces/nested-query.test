@@ -175,6 +175,11 @@ SELECT item_name FROM shipment WHERE qty <= (SELECT SUM(amount) FROM part WHERE 
 14 values hashing to eeafa4e65b8e56d2198e1a4703307d57
 
 query T nosort
+SELECT item_name FROM shipment WHERE qty <= (SELECT SUM(amount) FROM part WHERE shipment.pno = part.pno) order by item_name;
+----
+14 values hashing to eeafa4e65b8e56d2198e1a4703307d57
+
+query T nosort
 SELECT item_name FROM shipment WHERE qty < (SELECT SUM(amount) FROM part INNER JOIN shipment s on part.pno = s.pno) order by item_name;
 ----
 14 values hashing to eeafa4e65b8e56d2198e1a4703307d57
@@ -288,12 +293,12 @@ statement ok
 -- Test TypeJA
 
 query IIT nosort
-SELECT * FROM part WHERE amount > (SELECT MAX(qty) FROM shipment WHERE shipment.pno = part.pno) order by pno;
+SELECT * FROM part WHERE amount > (SELECT MAX(qty) FROM shipment WHERE shipment.pno = part.pno) order by part_name;
 ----
 21 values hashing to b6d55f2c7042fac31f69133143921bde
 
 query IIT nosort
-SELECT * FROM part WHERE amount < (SELECT MAX(qty) FROM shipment WHERE shipment.pno = part.pno) order by pno;
+SELECT * FROM part WHERE amount < (SELECT MAX(qty) FROM shipment WHERE shipment.pno = part.pno) order by part_name;
 ----
 15 values hashing to d3434eea5eea795c4f57399ca9e18e69
 

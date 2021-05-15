@@ -9,15 +9,15 @@
 #include "network/packet_writer.h"
 #include "planner/plannodes/output_schema.h"
 
-namespace terrier::execution::sql {
+namespace noisepage::execution::sql {
 struct Val;
 }
 
-namespace terrier::common {
+namespace noisepage::common {
 class ErrorData;
 }
 
-namespace terrier::network {
+namespace noisepage::network {
 /**
  * Wrapper around an I/O layer WriteQueue to provide Postgres-specific
  * helper methods.
@@ -76,6 +76,12 @@ class PostgresPacketWriter : public PacketWriter {
    */
   void WriteRowDescription(const std::vector<planner::OutputSchema::Column> &columns,
                            const std::vector<FieldFormat> &field_formats);
+
+  /**
+   * Writes row description for SQL EXPLAIN. This is special-cased because it requires the type be
+   * PostgresValueType::TEXT. If we ever support TEXT correctly, this function can be removed
+   */
+  void WriteExplainRowDescription();
 
   /**
    * Tells the client that the query command is complete.
@@ -189,4 +195,4 @@ class PostgresPacketWriter : public PacketWriter {
   uint32_t WriteTextAttribute(const execution::sql::Val *val, type::TypeId type);
 };
 
-}  // namespace terrier::network
+}  // namespace noisepage::network

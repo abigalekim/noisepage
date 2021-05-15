@@ -1,7 +1,5 @@
 #pragma once
 
-#include <gflags/gflags.h>
-
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -11,14 +9,15 @@
 #include "common/action_context.h"
 #include "common/error/exception.h"
 #include "common/shared_latch.h"
+#include "gflags/gflags.h"
 #include "loggers/settings_logger.h"
 #include "settings/settings_param.h"
 
-namespace terrier::parser {
+namespace noisepage::parser {
 class ConstantValueExpression;
 }
 
-namespace terrier::settings {
+namespace noisepage::settings {
 using setter_callback_fn = void (*)(common::ManagedPointer<common::ActionContext> action_context);
 
 /**
@@ -148,7 +147,10 @@ class SettingsManager {
    * @param param_map
    */
   static void ConstructParamMap(
-      std::unordered_map<terrier::settings::Param, terrier::settings::ParamInfo> &param_map);  // NOLINT
+      std::unordered_map<noisepage::settings::Param, noisepage::settings::ParamInfo> &param_map);  // NOLINT
+
+  /** @return The ParamInfo corresponding to the given parameter; throws exception if doesn't exist. */
+  const ParamInfo &GetParamInfo(const settings::Param &param) const;
 
  private:
   common::ManagedPointer<DBMain> db_main_;
@@ -162,8 +164,6 @@ class SettingsManager {
 
   /** @return The Param corresponding to the given name; throws exception if doesn't exist. */
   Param GetParam(const std::string &name) const;
-  /** @return The ParamInfo corresponding to the given parameter; throws exception if doesn't exist. */
-  const ParamInfo &GetParamInfo(const settings::Param &param) const;
 
   parser::ConstantValueExpression &GetValue(Param param);
   bool SetValue(Param param, parser::ConstantValueExpression value);
@@ -175,4 +175,4 @@ class SettingsManager {
   static void EmptySetterCallback(common::ManagedPointer<common::ActionContext> action_context UNUSED_ATTRIBUTE) {}
 };
 
-}  // namespace terrier::settings
+}  // namespace noisepage::settings

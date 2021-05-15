@@ -15,7 +15,7 @@
 #include "transaction/transaction_context.h"
 #include "type/type_id.h"
 
-namespace terrier::execution::sql {
+namespace noisepage::execution::sql {
 
 // Maps from index columns to table columns.
 using IndexTableMap = std::vector<uint16_t>;
@@ -106,8 +106,8 @@ class SchemaReader {
   SchemaReader()
       : type_names_{{"tinyint", type::TypeId::TINYINT}, {"smallint", type::TypeId::SMALLINT},
                     {"int", type::TypeId::INTEGER},     {"bigint", type::TypeId::BIGINT},
-                    {"bool", type::TypeId::BOOLEAN},    {"real", type::TypeId::DECIMAL},
-                    {"decimal", type::TypeId::DECIMAL}, {"varchar", type::TypeId::VARCHAR},
+                    {"bool", type::TypeId::BOOLEAN},    {"real", type::TypeId::REAL},
+                    {"decimal", type::TypeId::REAL},    {"varchar", type::TypeId::VARCHAR},
                     {"varlen", type::TypeId::VARCHAR},  {"date", type::TypeId::DATE}} {}
 
   /**
@@ -150,7 +150,7 @@ class SchemaReader {
         index_info->index_map_.emplace_back(col_idx);
         const auto &table_column = table_info->cols_[col_idx];
         index_info->cols_.emplace_back("index_col" + std::to_string(col_idx), table_column.Type(),
-                                       table_column.Nullable(), DummyCVE());
+                                       table_column.Nullable(), parser::ConstantValueExpression(table_column.Type()));
       }
       // Update list of indexes
       table_info->indexes_.emplace_back(std::move(index_info));
@@ -171,20 +171,16 @@ class SchemaReader {
       col_type = type_names_.at(col_type_str);
       if (col_type == type::TypeId::VARCHAR) {
         *in >> varchar_size;
-        cols.emplace_back(col_name, col_type, varchar_size, nullable, DummyCVE());
+        cols.emplace_back(col_name, col_type, varchar_size, nullable, parser::ConstantValueExpression(col_type));
       } else {
-        cols.emplace_back(col_name, col_type, nullable, DummyCVE());
+        cols.emplace_back(col_name, col_type, nullable, parser::ConstantValueExpression(col_type));
       }
     }
     return cols;
-  }
-
-  terrier::parser::ConstantValueExpression DummyCVE() {
-    return terrier::parser::ConstantValueExpression(type::TypeId::INTEGER, execution::sql::Integer(0));
   }
 
  private:
   // Supported types
   const std::unordered_map<std::string, type::TypeId> type_names_;
 };
-}  // namespace terrier::execution::sql
+}  // namespace noisepage::execution::sql

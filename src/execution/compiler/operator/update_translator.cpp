@@ -13,11 +13,10 @@
 #include "storage/index/index.h"
 #include "storage/sql_table.h"
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 UpdateTranslator::UpdateTranslator(const planner::UpdatePlanNode &plan, CompilationContext *compilation_context,
                                    Pipeline *pipeline)
-    : OperatorTranslator(plan, compilation_context, pipeline, brain::ExecutionOperatingUnitType::UPDATE),
-      updater_(GetCodeGen()->MakeFreshIdentifier("updater")),
+    : OperatorTranslator(plan, compilation_context, pipeline, selfdriving::ExecutionOperatingUnitType::UPDATE),
       update_pr_(GetCodeGen()->MakeFreshIdentifier("update_pr")),
       col_oids_(GetCodeGen()->MakeFreshIdentifier("col_oids")),
       table_schema_(GetCodeGen()->GetCatalogAccessor()->GetSchema(plan.GetTableOid())),
@@ -30,24 +29,28 @@ UpdateTranslator::UpdateTranslator(const planner::UpdatePlanNode &plan, Compilat
     compilation_context->Prepare(*clause.second);
   }
 
-  for (auto &index_oid : GetCodeGen()->GetCatalogAccessor()->GetIndexOids(plan.GetTableOid())) {
+  auto &index_oids = GetPlanAs<planner::UpdatePlanNode>().GetIndexOids();
+  for (auto &index_oid : index_oids) {
     const auto &index_schema = GetCodeGen()->GetCatalogAccessor()->GetIndexSchema(index_oid);
     for (const auto &index_col : index_schema.GetColumns()) {
       compilation_context->Prepare(*index_col.StoredExpression());
     }
   }
 
-  num_updates_ = CounterDeclare("num_updates");
+  num_updates_ = CounterDeclare("num_updates", pipeline);
+  ast::Expr *storage_interface_type = GetCodeGen()->BuiltinType(ast::BuiltinType::StorageInterface);
+  si_updater_ = pipeline->DeclarePipelineStateEntry("storageInterface", storage_interface_type);
 }
 
-void UpdateTranslator::InitializeQueryState(FunctionBuilder *function) const { CounterSet(function, num_updates_, 0); }
-
-void UpdateTranslator::PerformPipelineWork(WorkContext *context, FunctionBuilder *function) const {
+void UpdateTranslator::InitializePipelineState(const Pipeline &pipeline, FunctionBuilder *function) const {
   // var col_oids: [num_cols]uint32
   // col_oids[i] = ...
-  // var updater : StorageInterface
-  // @storageInterfaceInit(updater, execCtx, table_oid, col_oids, true)
+  // @storageInterfaceInit(&pipelineState.storageInterface, execCtx, table_oid, col_oids, true)
   DeclareUpdater(function);
+  CounterSet(function, num_updates_, 0);
+}
+
+void UpdateTranslator::PerformPipelineWork(WorkContext *context, FunctionBuilder *function) const {
   // var update_pr : *ProjectedRow
   DeclareUpdatePR(function);
 
@@ -55,11 +58,11 @@ void UpdateTranslator::PerformPipelineWork(WorkContext *context, FunctionBuilder
 
   if (op.GetIndexedUpdate()) {
     // For indexed updates, we need to call delete first.
-    // if (!@tableDelete(&deleter, &slot)) { Abort(); }
+    // if (!@tableDelete(&pipelineState.storageInterface, &slot)) { Abort(); }
     GenTableDelete(function);
   }
 
-  // var update_pr = @getTablePR(&updater)
+  // var update_pr = @getTablePR(&pipelineState.storageInterface)
   // @prSet(update_pr, ... @vpiGet(...) ...)
   GetUpdatePR(function);
 
@@ -68,9 +71,9 @@ void UpdateTranslator::PerformPipelineWork(WorkContext *context, FunctionBuilder
 
   if (op.GetIndexedUpdate()) {
     // For indexed updates, we need to re-insert into the table, and then delete-and-insert into every index.
-    // var insert_slot = @tableInsert(&updater_)
+    // var insert_slot = @tableInsert(&pipelineState.storageInterface)
     GenTableInsert(function);
-    const auto &indexes = GetCodeGen()->GetCatalogAccessor()->GetIndexOids(op.GetTableOid());
+    const auto &indexes = GetPlanAs<planner::UpdatePlanNode>().GetIndexOids();
     for (const auto &index_oid : indexes) {
       GenIndexDelete(function, context, index_oid);
       GenIndexInsert(context, function, index_oid);
@@ -82,42 +85,53 @@ void UpdateTranslator::PerformPipelineWork(WorkContext *context, FunctionBuilder
   function->Append(GetCodeGen()->ExecCtxAddRowsAffected(GetExecutionContext(), 1));
 
   CounterAdd(function, num_updates_, 1);
+}
 
-  // @storageInterfaceFree(&updater)
+void UpdateTranslator::TearDownPipelineState(const Pipeline &pipeline, FunctionBuilder *function) const {
+  // @storageInterfaceFree(&pipelineState.storageInterface)
   GenUpdaterFree(function);
 }
 
 void UpdateTranslator::FinishPipelineWork(const Pipeline &pipeline, FunctionBuilder *function) const {
-  FeatureRecord(function, brain::ExecutionOperatingUnitType::UPDATE,
-                brain::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline, CounterVal(num_updates_));
-  FeatureRecord(function, brain::ExecutionOperatingUnitType::UPDATE,
-                brain::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline, CounterVal(num_updates_));
+  if (GetPlanAs<planner::UpdatePlanNode>().GetIndexOids().empty()) {
+    FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::UPDATE,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline, CounterVal(num_updates_));
+    FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::UPDATE,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline, CounterVal(num_updates_));
+  } else {
+    FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::INSERT,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline, CounterVal(num_updates_));
+    FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::INSERT,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline, CounterVal(num_updates_));
+    FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::DELETE,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline, CounterVal(num_updates_));
+    FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::DELETE,
+                  selfdriving::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline, CounterVal(num_updates_));
+  }
+
   FeatureArithmeticRecordMul(function, pipeline, GetTranslatorId(), CounterVal(num_updates_));
 }
 
-void UpdateTranslator::DeclareUpdater(terrier::execution::compiler::FunctionBuilder *builder) const {
+void UpdateTranslator::DeclareUpdater(noisepage::execution::compiler::FunctionBuilder *builder) const {
   // var col_oids: [num_cols]uint32
   // col_oids[i] = ...
   SetOids(builder);
-  // var updater : StorageInterface
-  auto *storage_interface_type = GetCodeGen()->BuiltinType(ast::BuiltinType::Kind::StorageInterface);
-  builder->Append(GetCodeGen()->DeclareVar(updater_, storage_interface_type, nullptr));
-  // @storageInterfaceInit(updater, execCtx, table_oid, col_oids, true)
+  // @storageInterfaceInit(&pipelineState.storageInterface, execCtx, table_oid, col_oids, true)
   ast::Expr *updater_setup = GetCodeGen()->StorageInterfaceInit(
-      updater_, GetExecutionContext(), GetPlanAs<planner::UpdatePlanNode>().GetTableOid().UnderlyingValue(), col_oids_,
-      true);
+      si_updater_.GetPtr(GetCodeGen()), GetExecutionContext(),
+      GetPlanAs<planner::UpdatePlanNode>().GetTableOid().UnderlyingValue(), col_oids_, true);
   builder->Append(GetCodeGen()->MakeStmt(updater_setup));
 }
 
-void UpdateTranslator::GenUpdaterFree(terrier::execution::compiler::FunctionBuilder *builder) const {
-  // @storageInterfaceFree(&updater)
+void UpdateTranslator::GenUpdaterFree(noisepage::execution::compiler::FunctionBuilder *builder) const {
+  // @storageInterfaceFree(&pipelineState.storageInterface)
   ast::Expr *updater_free =
-      GetCodeGen()->CallBuiltin(ast::Builtin::StorageInterfaceFree, {GetCodeGen()->AddressOf(updater_)});
+      GetCodeGen()->CallBuiltin(ast::Builtin::StorageInterfaceFree, {si_updater_.GetPtr(GetCodeGen())});
   builder->Append(GetCodeGen()->MakeStmt(updater_free));
 }
 
 ast::Expr *UpdateTranslator::GetChildOutput(WorkContext *context, uint32_t child_idx, uint32_t attr_idx) const {
-  TERRIER_ASSERT(child_idx == 0, "Update plan can only have one child");
+  NOISEPAGE_ASSERT(child_idx == 0, "Update plan can only have one child");
   const auto &op = GetPlanAs<planner::UpdatePlanNode>();
   const auto &child_translator = GetCompilationContext()->LookupTranslator(*op.GetChild(0));
   return child_translator->GetOutput(context, attr_idx);
@@ -144,39 +158,23 @@ void UpdateTranslator::SetOids(FunctionBuilder *builder) const {
   }
 }
 
-void UpdateTranslator::DeclareUpdatePR(terrier::execution::compiler::FunctionBuilder *builder) const {
+void UpdateTranslator::DeclareUpdatePR(noisepage::execution::compiler::FunctionBuilder *builder) const {
   // var update_pr : *ProjectedRow
   auto *pr_type = GetCodeGen()->BuiltinType(ast::BuiltinType::Kind::ProjectedRow);
   builder->Append(GetCodeGen()->DeclareVar(update_pr_, GetCodeGen()->PointerType(pr_type), nullptr));
 }
 
-void UpdateTranslator::GetUpdatePR(terrier::execution::compiler::FunctionBuilder *builder) const {
-  // var update_pr = @getTablePR(&updater)
-  auto *get_pr_call = GetCodeGen()->CallBuiltin(ast::Builtin::GetTablePR, {GetCodeGen()->AddressOf(updater_)});
+void UpdateTranslator::GetUpdatePR(noisepage::execution::compiler::FunctionBuilder *builder) const {
+  // var update_pr = @getTablePR(&pipelineState.storageInterface)
+  auto *get_pr_call = GetCodeGen()->CallBuiltin(ast::Builtin::GetTablePR, {si_updater_.GetPtr(GetCodeGen())});
   builder->Append(GetCodeGen()->Assign(GetCodeGen()->MakeExpr(update_pr_), get_pr_call));
-
-  const auto &op = GetPlanAs<planner::UpdatePlanNode>();
-  auto *update_pr = GetCodeGen()->MakeExpr(update_pr_);
-  // TODO(WAN): is this a hack?
-  // Set the update_pr from the child so that updates can safely refer to themselves, e.g. UPDATE a = a+1.
-  // @prSet(update_pr, ...)
-  if (op.GetChildrenSize() > 0) {
-    const auto *child = GetCompilationContext()->LookupTranslator(*op.GetChild(0));
-
-    for (const auto oid : all_oids_) {
-      const auto &col = table_schema_.GetColumn(oid);
-      const auto idx = table_pm_.find(oid)->second;
-
-      ast::Expr *child_expr = child->GetTableColumn(oid);
-      ast::Expr *set_pr = GetCodeGen()->PRSet(update_pr, col.Type(), col.Nullable(), idx, child_expr, true);
-      builder->Append(GetCodeGen()->MakeStmt(set_pr));
-    }
-  }
 }
 
 void UpdateTranslator::GenSetTablePR(FunctionBuilder *builder, WorkContext *context) const {
-  const auto &clauses = GetPlanAs<planner::UpdatePlanNode>().GetSetClauses();
+  const auto &op = GetPlanAs<planner::UpdatePlanNode>();
+  const auto &clauses = op.GetSetClauses();
 
+  std::unordered_set<catalog::col_oid_t> set_oids;
   for (const auto &clause : clauses) {
     // @prSet(update_pr, ...)
     const auto &table_col_oid = clause.first;
@@ -185,35 +183,51 @@ void UpdateTranslator::GenSetTablePR(FunctionBuilder *builder, WorkContext *cont
     auto *pr_set_call = GetCodeGen()->PRSet(GetCodeGen()->MakeExpr(update_pr_), table_col.Type(), table_col.Nullable(),
                                             table_pm_.find(table_col_oid)->second, clause_expr, true);
     builder->Append(GetCodeGen()->MakeStmt(pr_set_call));
+
+    set_oids.insert(table_col_oid);
+  }
+
+  for (const auto oid : all_oids_) {
+    if (set_oids.find(oid) == set_oids.end()) {
+      // For columns not modified by an update clause, copy the original value.
+      const auto &col = table_schema_.GetColumn(oid);
+      const auto idx = table_pm_.find(oid)->second;
+
+      const auto *provider = GetCompilationContext()->LookupTranslator(*op.GetChild(0));
+      ast::Expr *child_expr = provider->GetTableColumn(oid);
+      ast::Expr *set_pr =
+          GetCodeGen()->PRSet(GetCodeGen()->MakeExpr(update_pr_), col.Type(), col.Nullable(), idx, child_expr, true);
+      builder->Append(GetCodeGen()->MakeStmt(set_pr));
+    }
   }
 }
 
 void UpdateTranslator::GenTableUpdate(FunctionBuilder *builder) const {
-  // if (!tableUpdate(&updater) { Abort(); }
+  // if (!tableUpdate(&pipelineState.storageInterface) { Abort(); }
   const auto &op = GetPlanAs<planner::UpdatePlanNode>();
   const auto &child_translator = GetCompilationContext()->LookupTranslator(*op.GetChild(0));
   const auto &update_slot = child_translator->GetSlotAddress();
-  std::vector<ast::Expr *> update_args{GetCodeGen()->AddressOf(updater_), update_slot};
+  std::vector<ast::Expr *> update_args{si_updater_.GetPtr(GetCodeGen()), update_slot};
   auto *update_call = GetCodeGen()->CallBuiltin(ast::Builtin::TableUpdate, update_args);
 
   auto *cond = GetCodeGen()->UnaryOp(parsing::Token::Type::BANG, update_call);
   If success(builder, cond);
-  builder->Append(GetCodeGen()->AbortTxn(GetExecutionContext()));
+  { builder->Append(GetCodeGen()->AbortTxn(GetExecutionContext())); }
   success.EndIf();
 }
 
 void UpdateTranslator::GenTableInsert(FunctionBuilder *builder) const {
-  // var insert_slot = @tableInsert(&updater_)
+  // var insert_slot = @tableInsert(&pipelineState.storageInterface)
   const auto &insert_slot = GetCodeGen()->MakeFreshIdentifier("insert_slot");
-  auto *insert_call = GetCodeGen()->CallBuiltin(ast::Builtin::TableInsert, {GetCodeGen()->AddressOf(updater_)});
+  auto *insert_call = GetCodeGen()->CallBuiltin(ast::Builtin::TableInsert, {si_updater_.GetPtr(GetCodeGen())});
   builder->Append(GetCodeGen()->DeclareVar(insert_slot, nullptr, insert_call));
 }
 
 void UpdateTranslator::GenIndexInsert(WorkContext *context, FunctionBuilder *builder,
                                       const catalog::index_oid_t &index_oid) const {
-  // var insert_index_pr = @getIndexPR(&updater, oid)
+  // var insert_index_pr = @getIndexPR(&pipelineState.storageInterface, oid)
   const auto &insert_index_pr = GetCodeGen()->MakeFreshIdentifier("insert_index_pr");
-  std::vector<ast::Expr *> pr_call_args{GetCodeGen()->AddressOf(updater_),
+  std::vector<ast::Expr *> pr_call_args{si_updater_.GetPtr(GetCodeGen()),
                                         GetCodeGen()->Const32(index_oid.UnderlyingValue())};
   auto *get_index_pr_call = GetCodeGen()->CallBuiltin(ast::Builtin::GetIndexPR, pr_call_args);
   builder->Append(GetCodeGen()->DeclareVar(insert_index_pr, nullptr, get_index_pr_call));
@@ -233,9 +247,9 @@ void UpdateTranslator::GenIndexInsert(WorkContext *context, FunctionBuilder *bui
     builder->Append(GetCodeGen()->MakeStmt(set_key_call));
   }
 
-  // if (!@indexInsert(&updater)) { Abort(); }
+  // if (!@indexInsert(&pipelineState.storageInterface)) { Abort(); }
   const auto &builtin = index_schema.Unique() ? ast::Builtin::IndexInsertUnique : ast::Builtin::IndexInsert;
-  auto *index_insert_call = GetCodeGen()->CallBuiltin(builtin, {GetCodeGen()->AddressOf(updater_)});
+  auto *index_insert_call = GetCodeGen()->CallBuiltin(builtin, {si_updater_.GetPtr(GetCodeGen())});
   auto *cond = GetCodeGen()->UnaryOp(parsing::Token::Type::BANG, index_insert_call);
   If success(builder, cond);
   { builder->Append(GetCodeGen()->AbortTxn(GetExecutionContext())); }
@@ -243,12 +257,12 @@ void UpdateTranslator::GenIndexInsert(WorkContext *context, FunctionBuilder *bui
 }
 
 void UpdateTranslator::GenTableDelete(FunctionBuilder *builder) const {
-  // if (!@tableDelete(&deleter, &slot)) { Abort(); }
+  // if (!@tableDelete(&pipelineState.storageInterface, &slot)) { Abort(); }
   const auto &op = GetPlanAs<planner::UpdatePlanNode>();
   const auto &child = GetCompilationContext()->LookupTranslator(*op.GetChild(0));
-  TERRIER_ASSERT(child != nullptr, "delete should have a child");
+  NOISEPAGE_ASSERT(child != nullptr, "delete should have a child");
   const auto &delete_slot = child->GetSlotAddress();
-  std::vector<ast::Expr *> delete_args{GetCodeGen()->AddressOf(updater_), delete_slot};
+  std::vector<ast::Expr *> delete_args{si_updater_.GetPtr(GetCodeGen()), delete_slot};
   auto *delete_call = GetCodeGen()->CallBuiltin(ast::Builtin::TableDelete, delete_args);
   auto *delete_failed = GetCodeGen()->UnaryOp(parsing::Token::Type::BANG, delete_call);
   If check(builder, delete_failed);
@@ -261,9 +275,9 @@ void UpdateTranslator::GenTableDelete(FunctionBuilder *builder) const {
 
 void UpdateTranslator::GenIndexDelete(FunctionBuilder *builder, WorkContext *context,
                                       const catalog::index_oid_t &index_oid) const {
-  // var delete_index_pr = @getIndexPR(&updater, oid)
+  // var delete_index_pr = @getIndexPR(&pipelineState.storageInterface, oid)
   auto delete_index_pr = GetCodeGen()->MakeFreshIdentifier("delete_index_pr");
-  std::vector<ast::Expr *> pr_call_args{GetCodeGen()->AddressOf(updater_),
+  std::vector<ast::Expr *> pr_call_args{si_updater_.GetPtr(GetCodeGen()),
                                         GetCodeGen()->Const32(index_oid.UnderlyingValue())};
   auto *get_index_pr_call = GetCodeGen()->CallBuiltin(ast::Builtin::GetIndexPR, pr_call_args);
   builder->Append(GetCodeGen()->DeclareVar(delete_index_pr, nullptr, get_index_pr_call));
@@ -285,8 +299,8 @@ void UpdateTranslator::GenIndexDelete(FunctionBuilder *builder, WorkContext *con
     builder->Append(GetCodeGen()->MakeStmt(pr_set_call));
   }
 
-  // @indexDelete(&updater)
-  std::vector<ast::Expr *> delete_args{GetCodeGen()->AddressOf(updater_), child->GetSlotAddress()};
+  // @indexDelete(&pipelineState.storageInterface)
+  std::vector<ast::Expr *> delete_args{si_updater_.GetPtr(GetCodeGen()), child->GetSlotAddress()};
   auto *index_delete_call = GetCodeGen()->CallBuiltin(ast::Builtin::IndexDelete, delete_args);
   builder->Append(GetCodeGen()->MakeStmt(index_delete_call));
 }
@@ -299,4 +313,4 @@ std::vector<catalog::col_oid_t> UpdateTranslator::CollectOids(const catalog::Sch
   return oids;
 }
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

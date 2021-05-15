@@ -6,9 +6,11 @@
 #include <memory>
 #include <string>
 
-#include "common/error/error_code.h"
+namespace noisepage::common {
+enum class ErrorCode : uint16_t;
+}  // namespace noisepage::common
 
-namespace terrier {
+namespace noisepage {
 
 /**
  * Use the macros below for generating exceptions.
@@ -19,13 +21,16 @@ namespace terrier {
 #define CATALOG_EXCEPTION(msg) CatalogException(msg, __FILE__, __LINE__)
 #define CONVERSION_EXCEPTION(msg) ConversionException(msg, __FILE__, __LINE__)
 #define PARSER_EXCEPTION(msg) ParserException(msg, __FILE__, __LINE__)
+#define MESSENGER_EXCEPTION(msg) MessengerException(msg, __FILE__, __LINE__)
 #define NETWORK_PROCESS_EXCEPTION(msg) NetworkProcessException(msg, __FILE__, __LINE__)
 #define OPTIMIZER_EXCEPTION(msg) OptimizerException(msg, __FILE__, __LINE__)
+#define REPLICATION_EXCEPTION(msg) ReplicationException(msg, __FILE__, __LINE__)
 #define SYNTAX_EXCEPTION(msg) SyntaxException(msg, __FILE__, __LINE__)
 #define ABORT_EXCEPTION(msg) AbortException(msg, __FILE__, __LINE__)
 #define EXECUTION_EXCEPTION(msg, code) ExecutionException(msg, __FILE__, __LINE__, (code))
 #define BINDER_EXCEPTION(msg, code) BinderException(msg, __FILE__, __LINE__, (code))
 #define SETTINGS_EXCEPTION(msg, code) SettingsException(msg, __FILE__, __LINE__, (code))
+#define PILOT_EXCEPTION(msg, code) PilotException(msg, __FILE__, __LINE__, (code))
 
 /**
  * Exception types
@@ -36,8 +41,11 @@ enum class ExceptionType : uint8_t {
   BINDER,
   CATALOG,
   CONVERSION,
+  MESSENGER,
+  PILOT,
   NETWORK,
   PARSER,
+  REPLICATION,
   SETTINGS,
   OPTIMIZER,
   SYNTAX,
@@ -82,8 +90,12 @@ class Exception : public std::runtime_error {
         return "Catalog";
       case ExceptionType::PARSER:
         return "Parser";
+      case ExceptionType::MESSENGER:
+        return "Messenger";
       case ExceptionType::NETWORK:
         return "Network";
+      case ExceptionType::REPLICATION:
+        return "Replication";
       case ExceptionType::SETTINGS:
         return "Settings";
       case ExceptionType::BINDER:
@@ -92,6 +104,8 @@ class Exception : public std::runtime_error {
         return "Optimizer";
       case ExceptionType::EXECUTION:
         return "Execution";
+      case ExceptionType::PILOT:
+        return "Pilot";
       default:
         return "Unknown exception type";
     }
@@ -151,6 +165,8 @@ class Exception : public std::runtime_error {
 
 DEFINE_EXCEPTION(NotImplementedException, ExceptionType::NOT_IMPLEMENTED);
 DEFINE_EXCEPTION(CatalogException, ExceptionType::CATALOG);
+DEFINE_EXCEPTION(MessengerException, ExceptionType::MESSENGER);
+DEFINE_EXCEPTION(ReplicationException, ExceptionType::REPLICATION);
 DEFINE_EXCEPTION(NetworkProcessException, ExceptionType::NETWORK);
 DEFINE_EXCEPTION(OptimizerException, ExceptionType::OPTIMIZER);
 DEFINE_EXCEPTION(ConversionException, ExceptionType::CONVERSION);
@@ -159,6 +175,7 @@ DEFINE_EXCEPTION(AbortException, ExceptionType::EXECUTION);
 DEFINE_EXCEPTION_WITH_ERRCODE(ExecutionException, ExceptionType::EXECUTION);
 DEFINE_EXCEPTION_WITH_ERRCODE(BinderException, ExceptionType::BINDER);
 DEFINE_EXCEPTION_WITH_ERRCODE(SettingsException, ExceptionType::SETTINGS);
+DEFINE_EXCEPTION_WITH_ERRCODE(PilotException, ExceptionType::PILOT);
 
 /**
  * Specialized Parser exception since we want a cursor position to get more verbose output
@@ -211,4 +228,4 @@ class ParserException : public Exception {
   uint32_t GetCursorPos() const { return cursorpos_; }
 };
 
-}  // namespace terrier
+}  // namespace noisepage

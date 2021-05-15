@@ -4,7 +4,7 @@
 #include "catalog/catalog_defs.h"
 #include "common/strong_typedef.h"
 
-namespace terrier::common {
+namespace noisepage::common {
 
 /**
  * An action's id is an internal identifier of the invocation of an action in the system.
@@ -16,8 +16,7 @@ namespace terrier::common {
 STRONG_TYPEDEF_HEADER(action_id_t, uint64_t);
 
 /**
- * @enum common::ActionState
- * @brief The lifecycle states states of internal actions.
+ * The lifecycle states of internal actions.
  */
 enum class ActionState : uint8_t {
   /** The system has created the action but the invocation has not started. */
@@ -83,4 +82,4 @@ class ActionContext {
   std::atomic<ActionState> state_;
 };
 
-}  // namespace terrier::common
+}  // namespace noisepage::common

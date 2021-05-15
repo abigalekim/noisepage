@@ -29,7 +29,7 @@
 #include "transaction/transaction_manager.h"
 #include "type/type_id.h"
 
-namespace terrier {
+namespace noisepage {
 class StorageTestUtil {
  public:
   StorageTestUtil() = delete;
@@ -199,8 +199,8 @@ class StorageTestUtil {
     for (uint32_t i = 0; i < layout.NumSlots(); i++) {
       storage::TupleSlot slot;
       bool ret UNUSED_ATTRIBUTE = accessor.Allocate(block, &slot);
-      TERRIER_ASSERT(ret && slot == storage::TupleSlot(block, i),
-                     "slot allocation should happen sequentially and succeed");
+      NOISEPAGE_ASSERT(ret && slot == storage::TupleSlot(block, i),
+                       "slot allocation should happen sequentially and succeed");
       if (coin(*generator)) {
         // slot will be marked empty
         accessor.Deallocate(slot);
@@ -215,7 +215,7 @@ class StorageTestUtil {
       for (uint16_t j = 0; j < redo->NumColumns(); j++)
         storage::StorageUtil::CopyAttrFromProjection(accessor, slot, *redo, j);
     }
-    TERRIER_ASSERT(block->GetInsertHead() == layout.NumSlots(), "The block should be considered full at this point");
+    NOISEPAGE_ASSERT(block->GetInsertHead() == layout.NumSlots(), "The block should be considered full at this point");
     return result;
   }
 
@@ -224,7 +224,7 @@ class StorageTestUtil {
   template <class Random>
   static uint32_t PopulateBlockRandomlyNoBookkeeping(storage::DataTable *table, storage::RawBlock *block,
                                                      double empty_ratio, Random *const generator) {
-    const storage::BlockLayout &layout = table->GetBlockLayout();
+    const storage::BlockLayout layout = table->GetBlockLayout();
     uint32_t result = 0;
     std::bernoulli_distribution coin(empty_ratio);
     // TODO(Tianyu): Do we ever want to tune this for tests?
@@ -239,8 +239,8 @@ class StorageTestUtil {
     for (uint32_t i = 0; i < layout.NumSlots(); i++) {
       storage::TupleSlot slot;
       bool ret UNUSED_ATTRIBUTE = accessor.Allocate(block, &slot);
-      TERRIER_ASSERT(ret && slot == storage::TupleSlot(block, i),
-                     "slot allocation should happen sequentially and succeed");
+      NOISEPAGE_ASSERT(ret && slot == storage::TupleSlot(block, i),
+                       "slot allocation should happen sequentially and succeed");
       if (coin(*generator)) {
         // slot will be marked empty
         accessor.Deallocate(slot);
@@ -253,7 +253,7 @@ class StorageTestUtil {
       for (uint16_t j = 0; j < redo->NumColumns(); j++)
         storage::StorageUtil::CopyAttrFromProjection(accessor, slot, *redo, j);
     }
-    TERRIER_ASSERT(block->GetInsertHead() == layout.NumSlots(), "The block should be considered full at this point");
+    NOISEPAGE_ASSERT(block->GetInsertHead() == layout.NumSlots(), "The block should be considered full at this point");
     delete[] redo_buffer;
     return result;
   }
@@ -389,7 +389,7 @@ class StorageTestUtil {
     // Select each tuple for both tables and perform equality
     bool result = true;
     for (auto &tuple : table_one_tuples) {
-      TERRIER_ASSERT(tuple_slot_map.find(tuple) != tuple_slot_map.end(), "No mapping for this tuple slot");
+      NOISEPAGE_ASSERT(tuple_slot_map.find(tuple) != tuple_slot_map.end(), "No mapping for this tuple slot");
       table_one->Select(common::ManagedPointer(txn_one), tuple, row_one);
       table_two->Select(common::ManagedPointer(txn_two), tuple_slot_map.at(tuple), row_two);
       if (!ProjectionListEqualDeep(layout, row_one, row_two)) {
@@ -484,7 +484,7 @@ class StorageTestUtil {
   static catalog::IndexSchema RandomGenericKeySchema(const uint32_t num_cols, const std::vector<type::TypeId> &types,
                                                      Random *generator) {
     uint32_t max_varlen_size = 20;
-    TERRIER_ASSERT(num_cols > 0, "Must have at least one column in your key schema.");
+    NOISEPAGE_ASSERT(num_cols > 0, "Must have at least one column in your key schema.");
 
     std::vector<catalog::indexkeycol_oid_t> key_oids;
     key_oids.reserve(num_cols);
@@ -505,7 +505,7 @@ class StorageTestUtil {
       switch (type) {
         case type::TypeId::VARBINARY:
         case type::TypeId::VARCHAR: {
-          auto varlen_size = std::uniform_int_distribution(0U, max_varlen_size)(*generator);
+          auto varlen_size = std::uniform_int_distribution(1U, max_varlen_size)(*generator);
           key_cols.emplace_back("", type, varlen_size, is_nullable, parser::ConstantValueExpression(type));
           break;
         }
@@ -516,7 +516,7 @@ class StorageTestUtil {
       ForceOid(&(key_cols.back()), key_oid);
     }
 
-    return catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, false, false, false, true);
+    return catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, false, false, false, true);
   }
 
   /**
@@ -555,13 +555,14 @@ class StorageTestUtil {
       bytes_used = static_cast<uint16_t>(bytes_used + type::TypeUtil::GetTypeSize(type));
     }
 
-    return catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, false, false, false, true);
+    return catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, false, false, false, true);
   }
 
  private:
   template <typename Random>
   static storage::BlockLayout RandomLayout(const uint16_t max_cols, Random *const generator, bool allow_varlen) {
-    TERRIER_ASSERT(max_cols > storage::NUM_RESERVED_COLUMNS, "There should be at least 2 cols (reserved for version).");
+    NOISEPAGE_ASSERT(max_cols > storage::NUM_RESERVED_COLUMNS,
+                     "There should be at least 2 cols (reserved for version).");
     // We probably won't allow tables with fewer than 2 columns
     const uint16_t num_attrs =
         std::uniform_int_distribution<uint16_t>(storage::NUM_RESERVED_COLUMNS + 1, max_cols)(*generator);
@@ -581,7 +582,7 @@ class StorageTestUtil {
   static catalog::Schema *RandomSchema(const uint16_t max_cols, Random *const generator, bool allow_varlen) {
     const uint16_t num_attrs = std::uniform_int_distribution<uint16_t>(1, max_cols)(*generator);
     std::vector<type::TypeId> possible_attr_types{type::TypeId::BOOLEAN, type::TypeId::SMALLINT, type::TypeId::INTEGER,
-                                                  type::TypeId::DECIMAL};
+                                                  type::TypeId::REAL};
     if (allow_varlen) possible_attr_types.push_back(type::TypeId::VARCHAR);
 
     std::vector<catalog::Schema::Column> columns;
@@ -593,10 +594,10 @@ class StorageTestUtil {
       catalog::Schema::Column col;
       if (random_type == type::TypeId::VARCHAR) {
         col = catalog::Schema::Column("col" + std::to_string(i), random_type, MAX_TEST_VARLEN_SIZE, false,
-                                      parser::ConstantValueExpression(type::TypeId::INTEGER));
+                                      parser::ConstantValueExpression(random_type));
       } else {
         col = catalog::Schema::Column("col" + std::to_string(i), random_type, false,
-                                      parser::ConstantValueExpression(type::TypeId::INTEGER));
+                                      parser::ConstantValueExpression(random_type));
       }
       col.SetOid(catalog::col_oid_t(i));
       columns.push_back(col);
@@ -605,4 +606,4 @@ class StorageTestUtil {
     return new catalog::Schema(columns);
   }
 };
-}  // namespace terrier
+}  // namespace noisepage

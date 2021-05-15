@@ -20,11 +20,11 @@
 #include "transaction/transaction_manager.h"
 #include "transaction/transaction_util.h"
 
-namespace terrier {
+namespace noisepage {
 
 struct CatalogTests : public TerrierTest {
   void SetUp() override {
-    db_main_ = terrier::DBMain::Builder().SetUseGC(true).SetUseCatalog(true).Build();
+    db_main_ = noisepage::DBMain::Builder().SetUseGC(true).SetUseCatalog(true).Build();
     txn_manager_ = db_main_->GetTransactionLayer()->GetTransactionManager();
     catalog_ = db_main_->GetCatalogLayer()->GetCatalog();
     auto *txn = txn_manager_->BeginTransaction();
@@ -35,7 +35,7 @@ struct CatalogTests : public TerrierTest {
   void VerifyCatalogTables(const catalog::CatalogAccessor &accessor) {
     auto ns_oid = accessor.GetNamespaceOid("pg_catalog");
     EXPECT_NE(ns_oid, catalog::INVALID_NAMESPACE_OID);
-    EXPECT_EQ(ns_oid, catalog::postgres::NAMESPACE_CATALOG_NAMESPACE_OID);
+    EXPECT_EQ(ns_oid, catalog::postgres::PgNamespace::NAMESPACE_CATALOG_NAMESPACE_OID);
 
     VerifyTablePresent(accessor, ns_oid, "pg_attribute");
     VerifyTablePresent(accessor, ns_oid, "pg_class");
@@ -138,8 +138,9 @@ TEST_F(CatalogTests, ProcTest) {
   std::vector<catalog::type_oid_t> arg_types = {accessor->GetTypeOidFromTypeId(type::TypeId::INTEGER),
                                                 accessor->GetTypeOidFromTypeId(type::TypeId::BOOLEAN),
                                                 accessor->GetTypeOidFromTypeId(type::TypeId::SMALLINT)};
-  std::vector<catalog::postgres::ProArgModes> arg_modes = {
-      catalog::postgres::ProArgModes::IN, catalog::postgres::ProArgModes::IN, catalog::postgres::ProArgModes::IN};
+  std::vector<catalog::postgres::PgProc::ArgModes> arg_modes = {catalog::postgres::PgProc::ArgModes::IN,
+                                                                catalog::postgres::PgProc::ArgModes::IN,
+                                                                catalog::postgres::PgProc::ArgModes::IN};
   auto src = "int sample(arg1, arg2, arg3){return 2;}";
 
   auto proc_oid =
@@ -158,16 +159,16 @@ TEST_F(CatalogTests, ProcTest) {
   // look for proc that we actually added
   found_oid = accessor->GetProcOid(procname, arg_types);
 
-  auto sin_oid = accessor->GetProcOid("sin", {accessor->GetTypeOidFromTypeId(type::TypeId::DECIMAL)});
+  auto sin_oid = accessor->GetProcOid("sin", {accessor->GetTypeOidFromTypeId(type::TypeId::REAL)});
   EXPECT_NE(sin_oid, catalog::INVALID_PROC_OID);
 
-  auto sin_context = accessor->GetProcCtxPtr(sin_oid);
+  auto sin_context = accessor->GetFunctionContext(sin_oid);
   EXPECT_TRUE(sin_context->IsBuiltin());
   EXPECT_EQ(sin_context->GetBuiltin(), execution::ast::Builtin::Sin);
-  EXPECT_EQ(sin_context->GetFunctionReturnType(), type::TypeId::DECIMAL);
+  EXPECT_EQ(sin_context->GetFunctionReturnType(), type::TypeId::REAL);
   auto sin_args = sin_context->GetFunctionArgsType();
   EXPECT_EQ(sin_args.size(), 1);
-  EXPECT_EQ(sin_args.back(), type::TypeId::DECIMAL);
+  EXPECT_EQ(sin_args.back(), type::TypeId::REAL);
   EXPECT_EQ(sin_context->GetFunctionName(), "sin");
 
   EXPECT_EQ(found_oid, proc_oid);
@@ -323,7 +324,7 @@ TEST_F(CatalogTests, UserIndexTest) {
   // Create the index
   std::vector<catalog::IndexSchema::Column> key_cols{catalog::IndexSchema::Column{
       "id", type::TypeId::INTEGER, false, parser::ColumnValueExpression(db_, table_oid, schema.GetColumn("id").Oid())}};
-  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true);
+  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true);
   auto idx_oid = accessor->CreateIndex(accessor->GetDefaultNamespace(), table_oid,
                                        "test_table_index_mabobberwithareallylongnamethatstillneedsmore", index_schema);
   EXPECT_NE(idx_oid, catalog::INVALID_INDEX_OID);
@@ -378,7 +379,7 @@ TEST_F(CatalogTests, CascadingDropTableTest) {
   EXPECT_NE(accessor, nullptr);
   std::vector<catalog::IndexSchema::Column> key_cols{catalog::IndexSchema::Column{
       "id", type::TypeId::INTEGER, false, parser::ColumnValueExpression(db_, table_oid, schema.GetColumn("id").Oid())}};
-  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true);
+  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true);
   auto idx_oid = accessor->CreateIndex(accessor->GetDefaultNamespace(), table_oid, "test_index", index_schema);
   EXPECT_NE(idx_oid, catalog::INVALID_INDEX_OID);
   auto true_schema = accessor->GetIndexSchema(idx_oid);
@@ -442,7 +443,7 @@ TEST_F(CatalogTests, CascadingDropNamespaceTest) {
   EXPECT_NE(accessor, nullptr);
   std::vector<catalog::IndexSchema::Column> key_cols{catalog::IndexSchema::Column{
       "id", type::TypeId::INTEGER, false, parser::ColumnValueExpression(db_, table_oid, schema.GetColumn("id").Oid())}};
-  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true);
+  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true);
   auto idx_oid = accessor->CreateIndex(ns_oid, table_oid, "test_index", index_schema);
   EXPECT_NE(idx_oid, catalog::INVALID_INDEX_OID);
   auto true_schema = accessor->GetIndexSchema(idx_oid);
@@ -507,7 +508,7 @@ TEST_F(CatalogTests, CascadingDropNamespaceWithIndexOnOtherNamespaceTest) {
   EXPECT_NE(accessor, nullptr);
   std::vector<catalog::IndexSchema::Column> key_cols{catalog::IndexSchema::Column{
       "id", type::TypeId::INTEGER, false, parser::ColumnValueExpression(db_, table_oid, schema.GetColumn("id").Oid())}};
-  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true);
+  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true);
   auto idx_oid = accessor->CreateIndex(ns_oid, table_oid, "test_index", index_schema);
   EXPECT_NE(idx_oid, catalog::INVALID_INDEX_OID);
   auto true_schema = accessor->GetIndexSchema(idx_oid);
@@ -555,7 +556,7 @@ TEST_F(CatalogTests, UserSearchPathTest) {
   auto accessor = catalog_->GetAccessor(common::ManagedPointer(txn), db_, DISABLED);
   auto public_ns_oid = accessor->GetNamespaceOid("public");
   EXPECT_NE(public_ns_oid, catalog::INVALID_NAMESPACE_OID);
-  EXPECT_EQ(public_ns_oid, catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID);
+  EXPECT_EQ(public_ns_oid, catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID);
   auto test_ns_oid = accessor->CreateNamespace("test");
   EXPECT_NE(test_ns_oid, catalog::INVALID_NAMESPACE_OID);
   VerifyCatalogTables(*accessor);  // Check visibility to me
@@ -615,7 +616,7 @@ TEST_F(CatalogTests, UserSearchPathTest) {
 TEST_F(CatalogTests, CatalogSearchPathTest) {
   auto txn = txn_manager_->BeginTransaction();
   auto accessor = catalog_->GetAccessor(common::ManagedPointer(txn), db_, DISABLED);
-  EXPECT_EQ(accessor->GetTableOid("pg_namespace"), catalog::postgres::NAMESPACE_TABLE_OID);
+  EXPECT_EQ(accessor->GetTableOid("pg_namespace"), catalog::postgres::PgNamespace::NAMESPACE_TABLE_OID);
 
   // Create the column definition (no OIDs)
   std::vector<catalog::Schema::Column> cols;
@@ -626,20 +627,22 @@ TEST_F(CatalogTests, CatalogSearchPathTest) {
   // Check whether name conflict is inserted into the proper default (first in search path) and masked by implicit
   // addition of 'pg_catalog' at start of search path
   auto user_table_oid = accessor->CreateTable(accessor->GetDefaultNamespace(), "pg_namespace", tmp_schema);
-  EXPECT_EQ(accessor->GetTableOid(catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID, "pg_namespace"), user_table_oid);
-  EXPECT_EQ(accessor->GetTableOid("pg_namespace"), catalog::postgres::NAMESPACE_TABLE_OID);
+  EXPECT_EQ(accessor->GetTableOid(catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID, "pg_namespace"),
+            user_table_oid);
+  EXPECT_EQ(accessor->GetTableOid("pg_namespace"), catalog::postgres::PgNamespace::NAMESPACE_TABLE_OID);
 
   // Explicitly set 'pg_catalog' as second in the search path and check proper searching
-  accessor->SetSearchPath(
-      {catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID, catalog::postgres::NAMESPACE_CATALOG_NAMESPACE_OID});
+  accessor->SetSearchPath({catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID,
+                           catalog::postgres::PgNamespace::NAMESPACE_CATALOG_NAMESPACE_OID});
   EXPECT_EQ(accessor->GetTableOid("pg_namespace"), user_table_oid);
-  EXPECT_EQ(accessor->GetTableOid(catalog::postgres::NAMESPACE_CATALOG_NAMESPACE_OID, "pg_namespace"),
-            catalog::postgres::NAMESPACE_TABLE_OID);
+  EXPECT_EQ(accessor->GetTableOid(catalog::postgres::PgNamespace::NAMESPACE_CATALOG_NAMESPACE_OID, "pg_namespace"),
+            catalog::postgres::PgNamespace::NAMESPACE_TABLE_OID);
 
   // Return to implicit declaration to ensure logic works correctly
-  accessor->SetSearchPath({catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID});
-  EXPECT_EQ(accessor->GetTableOid(catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID, "pg_namespace"), user_table_oid);
-  EXPECT_EQ(accessor->GetTableOid("pg_namespace"), catalog::postgres::NAMESPACE_TABLE_OID);
+  accessor->SetSearchPath({catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID});
+  EXPECT_EQ(accessor->GetTableOid(catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID, "pg_namespace"),
+            user_table_oid);
+  EXPECT_EQ(accessor->GetTableOid("pg_namespace"), catalog::postgres::PgNamespace::NAMESPACE_TABLE_OID);
 
   // Close out
   txn_manager_->Abort(txn);
@@ -686,7 +689,7 @@ TEST_F(CatalogTests, GetIndexesTest) {
   // Create the index
   std::vector<catalog::IndexSchema::Column> key_cols{catalog::IndexSchema::Column{
       "id", type::TypeId::INTEGER, false, parser::ColumnValueExpression(db_, table_oid, schema.GetColumn("id").Oid())}};
-  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true);
+  auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true);
   auto idx_oid = accessor->CreateIndex(accessor->GetDefaultNamespace(), table_oid, "test_table_idx", index_schema);
   EXPECT_NE(idx_oid, catalog::INVALID_INDEX_OID);
   auto true_schema = accessor->GetIndexSchema(idx_oid);
@@ -733,7 +736,7 @@ TEST_F(CatalogTests, GetIndexObjectsTest) {
     std::vector<catalog::IndexSchema::Column> key_cols{
         catalog::IndexSchema::Column{"id", type::TypeId::INTEGER, false,
                                      parser::ColumnValueExpression(db_, table_oid, schema.GetColumn("id").Oid())}};
-    auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true);
+    auto index_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true);
     auto idx_oid = accessor->CreateIndex(accessor->GetDefaultNamespace(), table_oid,
                                          "test_table_idx" + std::to_string(i), index_schema);
     EXPECT_NE(idx_oid, catalog::INVALID_INDEX_OID);
@@ -838,4 +841,34 @@ TEST_F(CatalogTests, DDLLockTest) {
   txn_manager_->Commit(txn5, transaction::TransactionUtil::EmptyCallback, nullptr);  // txn5 releases the lock
 }
 
-}  // namespace terrier
+TEST_F(CatalogTests, StatisticTest) {
+  auto txn = txn_manager_->BeginTransaction();
+  auto accessor = catalog_->GetAccessor(common::ManagedPointer(txn), db_, DISABLED);
+
+  // Create test table
+  const auto *table_name = "stat_test";
+  const auto *column_name = "a";
+  std::vector<catalog::Schema::Column> cols;
+  cols.emplace_back(column_name, type::TypeId::INTEGER, false, parser::ConstantValueExpression(type::TypeId::INTEGER));
+  auto tmp_schema = catalog::Schema(cols);
+
+  auto table_oid = accessor->CreateTable(accessor->GetDefaultNamespace(), table_name, tmp_schema);
+  auto schema = accessor->GetSchema(table_oid);
+  auto *table = new storage::SqlTable(db_main_->GetStorageLayer()->GetBlockStore(), schema);
+  EXPECT_TRUE(accessor->SetTablePointer(table_oid, table));
+  auto col_oid = accessor->GetSchema(table_oid).GetColumn(column_name).Oid();
+
+  auto table_stats = accessor->GetTableStatistics(table_oid);
+  EXPECT_TRUE(table_stats.HasColumnStats(col_oid));
+  EXPECT_EQ(table_stats.GetNumRows(), 0);
+  EXPECT_EQ(table_stats.GetColumnCount(), 1);
+
+  auto col_stats = accessor->GetColumnStatistics(table_oid, col_oid);
+  EXPECT_NE(col_stats, nullptr);
+  EXPECT_EQ(col_stats->GetNumRows(), 0);
+  EXPECT_EQ(col_stats->GetColumnID(), col_oid);
+
+  txn_manager_->Commit(txn, transaction::TransactionUtil::EmptyCallback, nullptr);
+}
+
+}  // namespace noisepage

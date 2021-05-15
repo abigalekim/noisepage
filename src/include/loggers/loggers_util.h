@@ -1,18 +1,17 @@
 #pragma once
 
-#include <memory>
-
 // flush the debug logs, every <n> seconds
 #define DEBUG_LOG_FLUSH_INTERVAL 3
 
+#include "common/sanctioned_shared_pointer.h"
 #include "spdlog/fmt/ostr.h"
 #include "spdlog/sinks/basic_file_sink.h"
 #include "spdlog/sinks/stdout_sinks.h"
 #include "spdlog/spdlog.h"
 
-extern std::shared_ptr<spdlog::sinks::stdout_sink_mt> default_sink;  // NOLINT
+extern noisepage::common::SanctionedSharedPtr<spdlog::sinks::stdout_sink_mt>::Ptr default_sink;
 
-namespace terrier {
+namespace noisepage {
 
 /**
  * Debug loggers get initialized here in a single static class.
@@ -31,4 +30,4 @@ class LoggersUtil {
    */
   static void ShutDown();
 };
-}  // namespace terrier
+}  // namespace noisepage

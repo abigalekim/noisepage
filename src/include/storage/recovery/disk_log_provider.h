@@ -5,7 +5,7 @@
 #include "storage/recovery/abstract_log_provider.h"
 #include "storage/write_ahead_log/log_io.h"
 
-namespace terrier::storage {
+namespace noisepage::storage {
 
 /**
  * @brief Log provider for logs stored on disk
@@ -18,6 +18,8 @@ class DiskLogProvider : public AbstractLogProvider {
    * @param log_file_path path to log file to read logs from
    */
   explicit DiskLogProvider(const std::string &log_file_path) : in_(BufferedLogReader(log_file_path.c_str())) {}
+
+  LogProviderType GetType() const override { return LogProviderType::DISK; }
 
  private:
   // Buffered log file reader
@@ -37,4 +39,4 @@ class DiskLogProvider : public AbstractLogProvider {
   bool Read(void *dest, uint32_t size) override { return in_.Read(dest, size); }
 };
 
-}  // namespace terrier::storage
+}  // namespace noisepage::storage

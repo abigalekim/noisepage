@@ -11,10 +11,11 @@
 #include "execution/exec_defs.h"
 #include "execution/vm/vm_defs.h"
 
-namespace terrier {
-namespace brain {
+namespace noisepage {
+namespace selfdriving {
 class PipelineOperatingUnits;
-}  // namespace brain
+class PilotUtil;
+}  // namespace selfdriving
 
 namespace execution {
 namespace exec {
@@ -40,13 +41,16 @@ class AbstractPlanNode;
 }  // namespace planner
 
 namespace runner {
-class MiniRunners;
-class MiniRunners_SEQ0_OutputRunners_Benchmark;
+class ExecutionRunners;
+class ExecutionRunners_SEQ0_OutputRunners_Benchmark;
+class ExecutionRunners_SEQ10_0_IndexInsertRunners_Benchmark;
 }  // namespace runner
 
-}  // namespace terrier
+}  // namespace noisepage
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
+
+class CompilationContext;
 
 /**
  * An compiled and executable query object.
@@ -122,7 +126,7 @@ class ExecutableQuery {
    * @param pipeline_operating_units The pipeline operating units that were generated with the fragments.
    */
   void Setup(std::vector<std::unique_ptr<Fragment>> &&fragments, std::size_t query_state_size,
-             std::unique_ptr<brain::PipelineOperatingUnits> pipeline_operating_units);
+             std::unique_ptr<selfdriving::PipelineOperatingUnits> pipeline_operating_units);
 
   /**
    * Execute the query.
@@ -146,18 +150,12 @@ class ExecutableQuery {
   const exec::ExecutionSettings &GetExecutionSettings() const { return exec_settings_; }
 
   /** @return The pipeline operating units that were used to generate this query. Setup must have been called! */
-  common::ManagedPointer<brain::PipelineOperatingUnits> GetPipelineOperatingUnits() const {
+  common::ManagedPointer<selfdriving::PipelineOperatingUnits> GetPipelineOperatingUnits() const {
     return common::ManagedPointer(pipeline_operating_units_);
   }
 
   /** @return The Query Identifier */
   query_id_t GetQueryId() { return query_id_; }
-
-  /** @param query_text The SQL string for this query */
-  void SetQueryText(common::ManagedPointer<const std::string> query_text) { query_text_ = query_text; }
-
-  /** @return The SQL query string */
-  common::ManagedPointer<const std::string> GetQueryText() { return query_text_; }
 
  private:
   // The plan.
@@ -176,7 +174,7 @@ class ExecutableQuery {
   std::size_t query_state_size_;
 
   // The pipeline operating units that were generated as part of this query.
-  std::unique_ptr<brain::PipelineOperatingUnits> pipeline_operating_units_;
+  std::unique_ptr<selfdriving::PipelineOperatingUnits> pipeline_operating_units_;
 
   // For mini_runners.cpp
 
@@ -187,16 +185,24 @@ class ExecutableQuery {
    * Set Pipeline Operating Units for use by mini_runners
    * @param units Pipeline Operating Units
    */
-  void SetPipelineOperatingUnits(std::unique_ptr<brain::PipelineOperatingUnits> &&units);
+  void SetPipelineOperatingUnits(std::unique_ptr<selfdriving::PipelineOperatingUnits> &&units);
+
+  /**
+   * Sets the executable query's query identifier
+   * @param query_id Query ID to set it to
+   */
+  void SetQueryId(query_id_t query_id) { query_id_ = query_id; }
 
   std::string query_name_;
   query_id_t query_id_;
   static std::atomic<query_id_t> query_identifier;
-  common::ManagedPointer<const std::string> query_text_;
 
   // MiniRunners needs to set query_identifier and pipeline_operating_units_.
-  friend class terrier::runner::MiniRunners;
-  friend class terrier::runner::MiniRunners_SEQ0_OutputRunners_Benchmark;
+  friend class noisepage::runner::ExecutionRunners;
+  friend class noisepage::runner::ExecutionRunners_SEQ0_OutputRunners_Benchmark;
+  friend class noisepage::selfdriving::PilotUtil;
+  friend class noisepage::execution::compiler::CompilationContext;  // SetQueryId
+  friend class noisepage::runner::ExecutionRunners_SEQ10_0_IndexInsertRunners_Benchmark;
 };
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

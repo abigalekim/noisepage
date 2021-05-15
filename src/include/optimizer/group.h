@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -15,7 +16,7 @@
 #include "optimizer/property_set.h"
 #include "optimizer/statistics/column_stats.h"
 
-namespace terrier::optimizer {
+namespace noisepage::optimizer {
 
 class GroupExpression;
 
@@ -26,6 +27,9 @@ class GroupExpression;
  */
 class Group {
  public:
+  /** Value for uninitialized stats (cardinality and number of rows in table) */
+  static constexpr size_t UNINITIALIZED_NUM_ROWS = std::numeric_limits<size_t>::max();
+
   /**
    * Constructor for a group
    * @param id ID of the Group
@@ -121,37 +125,50 @@ class Group {
    * Sets Number of rows
    * @param num_rows Number of rows
    */
-  void SetNumRows(int num_rows) { num_rows_ = num_rows; }
+  void SetNumRows(size_t num_rows) { num_rows_ = num_rows; }
 
   /**
    * Gets the estimated cardinality in # rows
    * @returns # rows estimated
    */
-  int GetNumRows() { return num_rows_; }
+  size_t GetNumRows() const { return num_rows_; }
 
   /**
-   * Get stats for a column
-   * @param column_name Column to get stats for
+   * Set the number of rows in the base table to scan
+   * @param table_num_rows Number of rows
    */
-  common::ManagedPointer<ColumnStats> GetStats(const std::string &column_name) {
-    TERRIER_ASSERT(stats_.count(column_name) != 0U, "Column Stats missing");
-    return common::ManagedPointer<ColumnStats>(stats_[column_name].get());
+  void SetTableNumRows(size_t table_num_rows) { table_num_rows_ = table_num_rows; }
+
+  /**
+   * Gets the number of rows in the base table to scan
+   * @returns number of rows in table
+   */
+  size_t GetTableNumRows() const { return table_num_rows_; }
+
+  /**
+   * Add the selectivity of a filter column (multiply selectivities for the same column, assuming conjunction AND)
+   * @param column_id column ID
+   * @param selectivity estimated selectivity
+   */
+  void AddFilterColumnSelectivity(catalog::col_oid_t column_id, double selectivity) {
+    if (filter_column_selectivities_.find(column_id) == filter_column_selectivities_.end())
+      filter_column_selectivities_[column_id] = selectivity;
+    else
+      filter_column_selectivities_[column_id] *= selectivity;
   }
 
   /**
-   * Checks if there are stats for a column
-   * @param column_name Column to check
+   * Get the selectivities for filter columns  (selectivities multiplied for the same column, assuming conjunction AND)
+   * @returns estimated selectivities
    */
-  bool HasColumnStats(const std::string &column_name) { return stats_.count(column_name) != 0U; }
+  const std::unordered_map<catalog::col_oid_t, double> &GetFilterColumnSelectivities() const {
+    return filter_column_selectivities_;
+  }
 
   /**
-   * Add stats for a column
-   * @param column_name Column to add stats
-   * @param stats Stats to add
+   * Checks if num rows is initialized
    */
-  void AddStats(const std::string &column_name, std::unique_ptr<ColumnStats> stats) {
-    stats_[column_name] = std::move(stats);
-  }
+  bool HasNumRows() { return num_rows_ != UNINITIALIZED_NUM_ROWS; }
 
   /**
    * Gets this Group's GroupID
@@ -170,8 +187,8 @@ class Group {
    * Should only be called during rewrite phase.
    */
   GroupExpression *GetLogicalExpression() {
-    TERRIER_ASSERT(logical_expressions_.size() == 1, "There should exist only 1 logical expression");
-    TERRIER_ASSERT(physical_expressions_.empty(), "No physical expressions should be present");
+    NOISEPAGE_ASSERT(logical_expressions_.size() == 1, "There should exist only 1 logical expression");
+    NOISEPAGE_ASSERT(physical_expressions_.empty(), "No physical expressions should be present");
     return logical_expressions_[0];
   }
 
@@ -214,22 +231,24 @@ class Group {
   std::vector<GroupExpression *> enforced_exprs_;
 
   /**
-   * Stats (added lazily)
-   * TODO(boweic):
-   * 1. Use table alias ID  + column offset to identify column
-   * 2. Support stats for arbitrary expressions
-   */
-  std::unordered_map<std::string, std::unique_ptr<ColumnStats>> stats_;
-
-  /**
    * Number of rows
    */
-  int num_rows_ = -1;
+  size_t num_rows_ = UNINITIALIZED_NUM_ROWS;
+
+  /**
+   * Number of rows in the base table (for LogicalGet)
+   */
+  size_t table_num_rows_ = UNINITIALIZED_NUM_ROWS;
 
   /**
    * Cost Lower Bound
    */
   double cost_lower_bound_ = -1;
+
+  /**
+   * Map from a column ID in the filter to the selectivity on that column
+   */
+  std::unordered_map<catalog::col_oid_t, double> filter_column_selectivities_;
 };
 
-}  // namespace terrier::optimizer
+}  // namespace noisepage::optimizer

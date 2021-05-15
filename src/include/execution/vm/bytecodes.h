@@ -6,7 +6,7 @@
 #include "common/macros.h"
 #include "execution/vm/bytecode_operands.h"
 
-namespace terrier::execution::vm {
+namespace noisepage::execution::vm {
 
 // Creates instances of a given opcode for all integer primitive types
 #define CREATE_FOR_INT_TYPES(F, op, ...) \
@@ -104,11 +104,20 @@ namespace terrier::execution::vm {
   F(ExecutionContextStartResourceTracker, OperandType::Local, OperandType::Local)                                     \
   F(ExecutionContextEndResourceTracker, OperandType::Local, OperandType::Local)                                       \
   F(ExecutionContextStartPipelineTracker, OperandType::Local, OperandType::Local)                                     \
-  F(ExecutionContextEndPipelineTracker, OperandType::Local, OperandType::Local, OperandType::Local)                   \
-  F(ExecutionContextGetFeature, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local,       \
+  F(ExecutionContextEndPipelineTracker, OperandType::Local, OperandType::Local, OperandType::Local,                   \
     OperandType::Local)                                                                                               \
-  F(ExecutionContextRecordFeature, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local,    \
-    OperandType::Local)                                                                                               \
+  F(ExecutionContextInitHooks, OperandType::Local, OperandType::Local)                                                \
+  F(ExecutionContextRegisterHook, OperandType::Local, OperandType::Local, OperandType::FunctionId)                    \
+  F(ExecutionContextClearHooks, OperandType::Local)                                                                   \
+  F(ExecOUFeatureVectorRecordFeature, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local, \
+    OperandType::Local, OperandType::Local)                                                                           \
+  F(ExecOUFeatureVectorInitialize, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local)    \
+  F(ExecOUFeatureVectorFilter, OperandType::Local, OperandType::Local)                                                \
+  F(ExecOUFeatureVectorReset, OperandType::Local)                                                                     \
+                                                                                                                      \
+  F(RegisterThreadWithMetricsManager, OperandType::Local)                                                             \
+  F(EnsureTrackersStopped, OperandType::Local)                                                                        \
+  F(AggregateMetricsThread, OperandType::Local)                                                                       \
   F(ExecutionContextSetMemoryUseOverride, OperandType::Local, OperandType::Local)                                     \
                                                                                                                       \
   /* Thread State Container */                                                                                        \
@@ -327,8 +336,9 @@ namespace terrier::execution::vm {
   F(HashCombine, OperandType::Local, OperandType::Local)                                                              \
                                                                                                                       \
   /* Aggregation Hash Table */                                                                                        \
-  F(AggregationHashTableInit, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local)         \
+  F(AggregationHashTableInit, OperandType::Local, OperandType::Local, OperandType::Local)                             \
   F(AggregationHashTableGetTupleCount, OperandType::Local, OperandType::Local)                                        \
+  F(AggregationHashTableGetInsertCount, OperandType::Local, OperandType::Local)                                       \
   F(AggregationHashTableAllocTuple, OperandType::Local, OperandType::Local, OperandType::Local)                       \
   F(AggregationHashTableAllocTuplePartitioned, OperandType::Local, OperandType::Local, OperandType::Local)            \
   F(AggregationHashTableLinkHashTableEntry, OperandType::Local, OperandType::Local)                                   \
@@ -439,9 +449,95 @@ namespace terrier::execution::vm {
   F(AvgAggregateReset, OperandType::Local)                                                                            \
   F(AvgAggregateGetResult, OperandType::Local, OperandType::Local)                                                    \
   F(AvgAggregateFree, OperandType::Local)                                                                             \
+  /* Top K Aggregates */                                                                                              \
+  F(BooleanTopKAggregateInit, OperandType::Local)                                                                     \
+  F(BooleanTopKAggregateAdvance, OperandType::Local, OperandType::Local)                                              \
+  F(BooleanTopKAggregateMerge, OperandType::Local, OperandType::Local)                                                \
+  F(BooleanTopKAggregateReset, OperandType::Local)                                                                    \
+  F(BooleanTopKAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                        \
+  F(BooleanTopKAggregateFree, OperandType::Local)                                                                     \
+  F(IntegerTopKAggregateInit, OperandType::Local)                                                                     \
+  F(IntegerTopKAggregateAdvance, OperandType::Local, OperandType::Local)                                              \
+  F(IntegerTopKAggregateMerge, OperandType::Local, OperandType::Local)                                                \
+  F(IntegerTopKAggregateReset, OperandType::Local)                                                                    \
+  F(IntegerTopKAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                        \
+  F(IntegerTopKAggregateFree, OperandType::Local)                                                                     \
+  F(RealTopKAggregateInit, OperandType::Local)                                                                        \
+  F(RealTopKAggregateAdvance, OperandType::Local, OperandType::Local)                                                 \
+  F(RealTopKAggregateMerge, OperandType::Local, OperandType::Local)                                                   \
+  F(RealTopKAggregateReset, OperandType::Local)                                                                       \
+  F(RealTopKAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                           \
+  F(RealTopKAggregateFree, OperandType::Local)                                                                        \
+  F(DecimalTopKAggregateInit, OperandType::Local)                                                                     \
+  F(DecimalTopKAggregateAdvance, OperandType::Local, OperandType::Local)                                              \
+  F(DecimalTopKAggregateMerge, OperandType::Local, OperandType::Local)                                                \
+  F(DecimalTopKAggregateReset, OperandType::Local)                                                                    \
+  F(DecimalTopKAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                        \
+  F(DecimalTopKAggregateFree, OperandType::Local)                                                                     \
+  F(StringTopKAggregateInit, OperandType::Local)                                                                      \
+  F(StringTopKAggregateAdvance, OperandType::Local, OperandType::Local)                                               \
+  F(StringTopKAggregateMerge, OperandType::Local, OperandType::Local)                                                 \
+  F(StringTopKAggregateReset, OperandType::Local)                                                                     \
+  F(StringTopKAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                         \
+  F(StringTopKAggregateFree, OperandType::Local)                                                                      \
+  F(DateTopKAggregateInit, OperandType::Local)                                                                        \
+  F(DateTopKAggregateAdvance, OperandType::Local, OperandType::Local)                                                 \
+  F(DateTopKAggregateMerge, OperandType::Local, OperandType::Local)                                                   \
+  F(DateTopKAggregateReset, OperandType::Local)                                                                       \
+  F(DateTopKAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                           \
+  F(DateTopKAggregateFree, OperandType::Local)                                                                        \
+  F(TimestampTopKAggregateInit, OperandType::Local)                                                                   \
+  F(TimestampTopKAggregateAdvance, OperandType::Local, OperandType::Local)                                            \
+  F(TimestampTopKAggregateMerge, OperandType::Local, OperandType::Local)                                              \
+  F(TimestampTopKAggregateReset, OperandType::Local)                                                                  \
+  F(TimestampTopKAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                      \
+  F(TimestampTopKAggregateFree, OperandType::Local)                                                                   \
+  /* Histogram Aggregates */                                                                                          \
+  F(BooleanHistogramAggregateInit, OperandType::Local)                                                                \
+  F(BooleanHistogramAggregateAdvance, OperandType::Local, OperandType::Local)                                         \
+  F(BooleanHistogramAggregateMerge, OperandType::Local, OperandType::Local)                                           \
+  F(BooleanHistogramAggregateReset, OperandType::Local)                                                               \
+  F(BooleanHistogramAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                   \
+  F(BooleanHistogramAggregateFree, OperandType::Local)                                                                \
+  F(IntegerHistogramAggregateInit, OperandType::Local)                                                                \
+  F(IntegerHistogramAggregateAdvance, OperandType::Local, OperandType::Local)                                         \
+  F(IntegerHistogramAggregateMerge, OperandType::Local, OperandType::Local)                                           \
+  F(IntegerHistogramAggregateReset, OperandType::Local)                                                               \
+  F(IntegerHistogramAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                   \
+  F(IntegerHistogramAggregateFree, OperandType::Local)                                                                \
+  F(RealHistogramAggregateInit, OperandType::Local)                                                                   \
+  F(RealHistogramAggregateAdvance, OperandType::Local, OperandType::Local)                                            \
+  F(RealHistogramAggregateMerge, OperandType::Local, OperandType::Local)                                              \
+  F(RealHistogramAggregateReset, OperandType::Local)                                                                  \
+  F(RealHistogramAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                      \
+  F(RealHistogramAggregateFree, OperandType::Local)                                                                   \
+  F(DecimalHistogramAggregateInit, OperandType::Local)                                                                \
+  F(DecimalHistogramAggregateAdvance, OperandType::Local, OperandType::Local)                                         \
+  F(DecimalHistogramAggregateMerge, OperandType::Local, OperandType::Local)                                           \
+  F(DecimalHistogramAggregateReset, OperandType::Local)                                                               \
+  F(DecimalHistogramAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                   \
+  F(DecimalHistogramAggregateFree, OperandType::Local)                                                                \
+  F(StringHistogramAggregateInit, OperandType::Local)                                                                 \
+  F(StringHistogramAggregateAdvance, OperandType::Local, OperandType::Local)                                          \
+  F(StringHistogramAggregateMerge, OperandType::Local, OperandType::Local)                                            \
+  F(StringHistogramAggregateReset, OperandType::Local)                                                                \
+  F(StringHistogramAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                    \
+  F(StringHistogramAggregateFree, OperandType::Local)                                                                 \
+  F(DateHistogramAggregateInit, OperandType::Local)                                                                   \
+  F(DateHistogramAggregateAdvance, OperandType::Local, OperandType::Local)                                            \
+  F(DateHistogramAggregateMerge, OperandType::Local, OperandType::Local)                                              \
+  F(DateHistogramAggregateReset, OperandType::Local)                                                                  \
+  F(DateHistogramAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                      \
+  F(DateHistogramAggregateFree, OperandType::Local)                                                                   \
+  F(TimestampHistogramAggregateInit, OperandType::Local)                                                              \
+  F(TimestampHistogramAggregateAdvance, OperandType::Local, OperandType::Local)                                       \
+  F(TimestampHistogramAggregateMerge, OperandType::Local, OperandType::Local)                                         \
+  F(TimestampHistogramAggregateReset, OperandType::Local)                                                             \
+  F(TimestampHistogramAggregateGetResult, OperandType::Local, OperandType::Local, OperandType::Local)                 \
+  F(TimestampHistogramAggregateFree, OperandType::Local)                                                              \
                                                                                                                       \
   /* Hash Joins */                                                                                                    \
-  F(JoinHashTableInit, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local)                \
+  F(JoinHashTableInit, OperandType::Local, OperandType::Local, OperandType::Local)                                    \
   F(JoinHashTableAllocTuple, OperandType::Local, OperandType::Local, OperandType::Local)                              \
   F(JoinHashTableGetTupleCount, OperandType::Local, OperandType::Local)                                               \
   F(JoinHashTableBuild, OperandType::Local)                                                                           \
@@ -474,8 +570,10 @@ namespace terrier::execution::vm {
   F(SorterIteratorFree, OperandType::Local)                                                                           \
                                                                                                                       \
   /* Output */                                                                                                        \
+  F(ResultBufferNew, OperandType::Local, OperandType::Local)                                                          \
   F(ResultBufferAllocOutputRow, OperandType::Local, OperandType::Local)                                               \
   F(ResultBufferFinalize, OperandType::Local)                                                                         \
+  F(ResultBufferFree, OperandType::Local)                                                                             \
                                                                                                                       \
   /* Index Iterator */                                                                                                \
   F(IndexIteratorInit, OperandType::Local, OperandType::Local, OperandType::UImm4, OperandType::Local,                \
@@ -594,6 +692,20 @@ namespace terrier::execution::vm {
   F(Log, OperandType::Local, OperandType::Local, OperandType::Local)                                                  \
   F(Pow, OperandType::Local, OperandType::Local, OperandType::Local)                                                  \
                                                                                                                       \
+  /* Atomic functions */                                                                                              \
+  F(AtomicAnd1, OperandType::Local, OperandType::Local, OperandType::Local)                                           \
+  F(AtomicAnd2, OperandType::Local, OperandType::Local, OperandType::Local)                                           \
+  F(AtomicAnd4, OperandType::Local, OperandType::Local, OperandType::Local)                                           \
+  F(AtomicAnd8, OperandType::Local, OperandType::Local, OperandType::Local)                                           \
+  F(AtomicOr1, OperandType::Local, OperandType::Local, OperandType::Local)                                            \
+  F(AtomicOr2, OperandType::Local, OperandType::Local, OperandType::Local)                                            \
+  F(AtomicOr4, OperandType::Local, OperandType::Local, OperandType::Local)                                            \
+  F(AtomicOr8, OperandType::Local, OperandType::Local, OperandType::Local)                                            \
+  F(AtomicCompareExchange1, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local)           \
+  F(AtomicCompareExchange2, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local)           \
+  F(AtomicCompareExchange4, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local)           \
+  F(AtomicCompareExchange8, OperandType::Local, OperandType::Local, OperandType::Local, OperandType::Local)           \
+                                                                                                                      \
   /* String functions */                                                                                              \
   F(Chr, OperandType::Local, OperandType::Local, OperandType::Local)                                                  \
   F(CharLength, OperandType::Local, OperandType::Local, OperandType::Local)                                           \
@@ -635,6 +747,11 @@ namespace terrier::execution::vm {
     OperandType::Local)                                                                                               \
   F(NpRunnersDummyInt, OperandType::Local)                                                                            \
   F(NpRunnersDummyReal, OperandType::Local)                                                                           \
+                                                                                                                      \
+  /* Replication. */                                                                                                  \
+  F(ReplicationGetLastTransactionId, OperandType::Local, OperandType::Local)                                          \
+                                                                                                                      \
+  /* Miscellaneous functions. */                                                                                      \
   F(Version, OperandType::Local, OperandType::Local)                                                                  \
                                                                                                                       \
   /* Parameter support. */                                                                                            \
@@ -712,7 +829,7 @@ class Bytecodes {
    * @return The type of the Nth operand to the given bytecode.
    */
   static OperandType GetNthOperandType(Bytecode bytecode, uint32_t operand_index) {
-    TERRIER_ASSERT(operand_index < NumOperands(bytecode), "Accessing out-of-bounds operand number for bytecode");
+    NOISEPAGE_ASSERT(operand_index < NumOperands(bytecode), "Accessing out-of-bounds operand number for bytecode");
     return GetOperandTypes(bytecode)[operand_index];
   }
 
@@ -720,7 +837,7 @@ class Bytecodes {
    * @return The size of the Nth operand to the given bytecode.
    */
   static OperandSize GetNthOperandSize(Bytecode bytecode, uint32_t operand_index) {
-    TERRIER_ASSERT(operand_index < NumOperands(bytecode), "Accessing out-of-bounds operand number for bytecode");
+    NOISEPAGE_ASSERT(operand_index < NumOperands(bytecode), "Accessing out-of-bounds operand number for bytecode");
     return GetOperandSizes(bytecode)[operand_index];
   }
 
@@ -740,7 +857,7 @@ class Bytecodes {
    * @return The raw encoded value for the input bytecode instruction.
    */
   static constexpr std::underlying_type_t<Bytecode> ToByte(Bytecode bytecode) {
-    TERRIER_ASSERT(bytecode <= Bytecode::Last, "Invalid bytecode");
+    NOISEPAGE_ASSERT(bytecode <= Bytecode::Last, "Invalid bytecode");
     return static_cast<std::underlying_type_t<Bytecode>>(bytecode);
   }
 
@@ -751,7 +868,7 @@ class Bytecodes {
    */
   static constexpr Bytecode FromByte(std::underlying_type_t<Bytecode> val) {
     auto bytecode = static_cast<Bytecode>(val);
-    TERRIER_ASSERT(bytecode <= Bytecode::Last, "Invalid bytecode");
+    NOISEPAGE_ASSERT(bytecode <= Bytecode::Last, "Invalid bytecode");
     return bytecode;
   }
 
@@ -794,4 +911,4 @@ class Bytecodes {
   static const char *bytecode_handler_name[];
 };
 
-}  // namespace terrier::execution::vm
+}  // namespace noisepage::execution::vm

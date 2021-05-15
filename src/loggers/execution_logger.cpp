@@ -1,10 +1,8 @@
 #include "loggers/execution_logger.h"
 
-#include <memory>
-
-namespace terrier::execution {
-
-std::shared_ptr<spdlog::logger> execution_logger = nullptr;  // NOLINT
+namespace noisepage::execution {
+#ifdef NOISEPAGE_USE_LOGGING
+common::SanctionedSharedPtr<spdlog::logger>::Ptr execution_logger = nullptr;
 
 void InitExecutionLogger() {
   if (execution_logger == nullptr) {
@@ -12,5 +10,5 @@ void InitExecutionLogger() {
     spdlog::register_logger(execution_logger);
   }
 }
-
-}  // namespace terrier::execution
+#endif
+}  // namespace noisepage::execution

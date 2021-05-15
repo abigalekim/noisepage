@@ -19,7 +19,7 @@
 #include "storage/index/index_builder.h"
 #include "storage/sql_table.h"
 
-namespace terrier::execution::sql {
+namespace noisepage::execution::sql {
 
 bool DDLExecutors::CreateDatabaseExecutor(const common::ManagedPointer<planner::CreateDatabasePlanNode> node,
                                           const common::ManagedPointer<catalog::CatalogAccessor> accessor) {
@@ -47,7 +47,7 @@ bool DDLExecutors::CreateTableExecutor(const common::ManagedPointer<planner::Cre
   // Instantiate a SqlTable and update the pointer in the Catalog
   auto *const table = new storage::SqlTable(node->GetBlockStore(), schema);
   bool result = accessor->SetTablePointer(table_oid, table);
-  TERRIER_ASSERT(result, "CreateTable succeeded, SetTablePointer must also succeed.");
+  NOISEPAGE_ASSERT(result, "CreateTable succeeded, SetTablePointer must also succeed.");
 
   if (node->HasPrimaryKey()) {
     // Create the IndexSchema Columns by referencing the Columns in the canonical table Schema from the Catalog
@@ -57,7 +57,7 @@ bool DDLExecutors::CreateTableExecutor(const common::ManagedPointer<planner::Cre
     for (const auto &parser_col : primary_key_info.primary_key_cols_) {
       const auto &table_col = schema.GetColumn(parser_col);
       if (table_col.Type() == type::TypeId::VARCHAR || table_col.Type() == type::TypeId::VARBINARY) {
-        key_cols.emplace_back(table_col.Name(), table_col.Type(), table_col.MaxVarlenSize(), table_col.Nullable(),
+        key_cols.emplace_back(table_col.Name(), table_col.Type(), table_col.TypeModifier(), table_col.Nullable(),
                               parser::ColumnValueExpression(connection_db, table_oid, table_col.Oid()));
 
       } else {
@@ -65,7 +65,7 @@ bool DDLExecutors::CreateTableExecutor(const common::ManagedPointer<planner::Cre
                               parser::ColumnValueExpression(connection_db, table_oid, table_col.Oid()));
       }
     }
-    catalog::IndexSchema index_schema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true);
+    catalog::IndexSchema index_schema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true);
 
     // Create the index, and use its return value as overall success result
     result = result &&
@@ -79,7 +79,7 @@ bool DDLExecutors::CreateTableExecutor(const common::ManagedPointer<planner::Cre
     for (const auto &unique_col : unique_constraint.unique_cols_) {
       const auto &table_col = schema.GetColumn(unique_col);
       if (table_col.Type() == type::TypeId::VARCHAR || table_col.Type() == type::TypeId::VARBINARY) {
-        key_cols.emplace_back(table_col.Name(), table_col.Type(), table_col.MaxVarlenSize(), table_col.Nullable(),
+        key_cols.emplace_back(table_col.Name(), table_col.Type(), table_col.TypeModifier(), table_col.Nullable(),
                               parser::ColumnValueExpression(connection_db, table_oid, table_col.Oid()));
 
       } else {
@@ -87,7 +87,7 @@ bool DDLExecutors::CreateTableExecutor(const common::ManagedPointer<planner::Cre
                               parser::ColumnValueExpression(connection_db, table_oid, table_col.Oid()));
       }
     }
-    catalog::IndexSchema index_schema(key_cols, storage::index::IndexType::BWTREE, true, false, false, true);
+    catalog::IndexSchema index_schema(key_cols, storage::index::IndexType::BPLUSTREE, true, false, false, true);
 
     // Create the index, and use its return value as overall success result
     result = result && CreateIndex(accessor, node->GetNamespaceOid(), unique_constraint.constraint_name_, table_oid,
@@ -109,9 +109,9 @@ bool DDLExecutors::CreateIndexExecutor(const common::ManagedPointer<planner::Cre
 bool DDLExecutors::DropDatabaseExecutor(const common::ManagedPointer<planner::DropDatabasePlanNode> node,
                                         const common::ManagedPointer<catalog::CatalogAccessor> accessor,
                                         const catalog::db_oid_t connection_db) {
-  TERRIER_ASSERT(connection_db != node->GetDatabaseOid(),
-                 "This command cannot be executed while connected to the target database. This should be checked in "
-                 "the binder.");
+  NOISEPAGE_ASSERT(connection_db != node->GetDatabaseOid(),
+                   "This command cannot be executed while connected to the target database. This should be checked in "
+                   "the binder.");
   const bool result = accessor->DropDatabase(node->GetDatabaseOid());
   return result;
 }
@@ -153,8 +153,8 @@ bool DDLExecutors::CreateIndex(const common::ManagedPointer<catalog::CatalogAcce
   index_builder.SetKeySchema(schema);
   auto *const index = index_builder.Build();
   bool result UNUSED_ATTRIBUTE = accessor->SetIndexPointer(index_oid, index);
-  TERRIER_ASSERT(result, "CreateIndex succeeded, SetIndexPointer must also succeed.");
+  NOISEPAGE_ASSERT(result, "CreateIndex succeeded, SetIndexPointer must also succeed.");
   return true;
 }
 
-}  // namespace terrier::execution::sql
+}  // namespace noisepage::execution::sql

@@ -12,11 +12,11 @@
 #include "parser/expression/abstract_expression.h"
 #include "type/type_util.h"
 
-namespace terrier::binder {
+namespace noisepage::binder {
 class BindNodeVisitor;
 }
 
-namespace terrier::parser {
+namespace noisepage::parser {
 
 /**
  * ConstantValueExpression represents a constant, e.g. numbers, string literals.
@@ -96,7 +96,7 @@ class ConstantValueExpression : public AbstractExpression {
    */
   std::unique_ptr<AbstractExpression> CopyWithChildren(
       std::vector<std::unique_ptr<AbstractExpression>> &&children) const override {
-    TERRIER_ASSERT(children.empty(), "ConstantValueExpression should have 0 children");
+    NOISEPAGE_ASSERT(children.empty(), "ConstantValueExpression should have 0 children");
     return Copy();
   }
 
@@ -110,7 +110,7 @@ class ConstantValueExpression : public AbstractExpression {
    * @return copy of the underlying Val
    */
   execution::sql::BoolVal GetBoolVal() const {
-    TERRIER_ASSERT(std::holds_alternative<execution::sql::BoolVal>(value_), "Invalid variant type for Get.");
+    NOISEPAGE_ASSERT(std::holds_alternative<execution::sql::BoolVal>(value_), "Invalid variant type for Get.");
     return std::get<execution::sql::BoolVal>(value_);
   }
 
@@ -118,7 +118,7 @@ class ConstantValueExpression : public AbstractExpression {
    * @return copy of the underlying Val
    */
   execution::sql::Integer GetInteger() const {
-    TERRIER_ASSERT(std::holds_alternative<execution::sql::Integer>(value_), "Invalid variant type for Get.");
+    NOISEPAGE_ASSERT(std::holds_alternative<execution::sql::Integer>(value_), "Invalid variant type for Get.");
     return std::get<execution::sql::Integer>(value_);
   }
 
@@ -126,15 +126,23 @@ class ConstantValueExpression : public AbstractExpression {
    * @return copy of the underlying Val
    */
   execution::sql::Real GetReal() const {
-    TERRIER_ASSERT(std::holds_alternative<execution::sql::Real>(value_), "Invalid variant type for Get.");
+    NOISEPAGE_ASSERT(std::holds_alternative<execution::sql::Real>(value_), "Invalid variant type for Get.");
     return std::get<execution::sql::Real>(value_);
+  }
+
+  /**
+   * @return copy of underlying Val
+   */
+  execution::sql::DecimalVal GetDecimalVal() const {
+    NOISEPAGE_ASSERT(std::holds_alternative<execution::sql::DecimalVal>(value_), "Invalid variant type for Get.");
+    return std::get<execution::sql::DecimalVal>(value_);
   }
 
   /**
    * @return copy of the underlying Val
    */
   execution::sql::DateVal GetDateVal() const {
-    TERRIER_ASSERT(std::holds_alternative<execution::sql::DateVal>(value_), "Invalid variant type for Get.");
+    NOISEPAGE_ASSERT(std::holds_alternative<execution::sql::DateVal>(value_), "Invalid variant type for Get.");
     return std::get<execution::sql::DateVal>(value_);
   }
 
@@ -142,7 +150,7 @@ class ConstantValueExpression : public AbstractExpression {
    * @return copy of the underlying Val
    */
   execution::sql::TimestampVal GetTimestampVal() const {
-    TERRIER_ASSERT(std::holds_alternative<execution::sql::TimestampVal>(value_), "Invalid variant type for Get.");
+    NOISEPAGE_ASSERT(std::holds_alternative<execution::sql::TimestampVal>(value_), "Invalid variant type for Get.");
     return std::get<execution::sql::TimestampVal>(value_);
   }
 
@@ -152,7 +160,7 @@ class ConstantValueExpression : public AbstractExpression {
    * a pointer to the buffer in this CVE. In that case, do not destroy this CVE before the copied StringVal
    */
   execution::sql::StringVal GetStringVal() const {
-    TERRIER_ASSERT(std::holds_alternative<execution::sql::StringVal>(value_), "Invalid variant type for Get.");
+    NOISEPAGE_ASSERT(std::holds_alternative<execution::sql::StringVal>(value_), "Invalid variant type for Get.");
     return std::get<execution::sql::StringVal>(value_);
   }
 
@@ -199,7 +207,7 @@ class ConstantValueExpression : public AbstractExpression {
       case type::TypeId::BIGINT: {
         return GetInteger().is_null_;
       }
-      case type::TypeId::DECIMAL: {
+      case type::TypeId::REAL: {
         return GetReal().is_null_;
       }
       case type::TypeId::TIMESTAMP: {
@@ -227,10 +235,13 @@ class ConstantValueExpression : public AbstractExpression {
   template <typename T>
   T Peek() const;
 
-  void Accept(common::ManagedPointer<binder::SqlNodeVisitor> v) override { v->Visit(common::ManagedPointer(this)); }
+  void Accept(common::ManagedPointer<binder::SqlNodeVisitor> v) override;
 
   /** @return A string representation of this ConstantValueExpression. */
   std::string ToString() const;
+
+  /** @return A ConstantValueExpression from input string and type. */
+  static ConstantValueExpression FromString(const std::string &val_string, type::TypeId type_id);
 
   /**
    * @return expression serialized to json
@@ -289,9 +300,13 @@ extern template int32_t ConstantValueExpression::Peek() const;
 extern template int64_t ConstantValueExpression::Peek() const;
 extern template float ConstantValueExpression::Peek() const;
 extern template double ConstantValueExpression::Peek() const;
+extern template execution::sql::Decimal32 ConstantValueExpression::Peek() const;
+extern template execution::sql::Decimal64 ConstantValueExpression::Peek() const;
+extern template execution::sql::Decimal128 ConstantValueExpression::Peek() const;
 extern template execution::sql::Date ConstantValueExpression::Peek() const;
 extern template execution::sql::Timestamp ConstantValueExpression::Peek() const;
 extern template std::string_view ConstantValueExpression::Peek() const;
+extern template storage::VarlenEntry ConstantValueExpression::Peek() const;
 /// @endcond
 
-}  // namespace terrier::parser
+}  // namespace noisepage::parser

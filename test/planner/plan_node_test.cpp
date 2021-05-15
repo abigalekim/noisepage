@@ -15,10 +15,11 @@
 #include "planner/plannodes/csv_scan_plan_node.h"
 #include "planner/plannodes/drop_database_plan_node.h"
 #include "planner/plannodes/hash_join_plan_node.h"
+#include "planner/plannodes/output_schema.h"
 #include "planner/plannodes/seq_scan_plan_node.h"
 #include "test_util/test_harness.h"
 
-namespace terrier::planner {
+namespace noisepage::planner {
 
 class PlanNodeTest : public TerrierTest {
  public:
@@ -172,6 +173,8 @@ TEST(PlanNodeTest, AggregatePlanTest) {
   EXPECT_EQ(plan->GetAggregateTerms().size(), 1);
   EXPECT_EQ(*plan->GetAggregateTerms()[0], *aggr_term);
   EXPECT_EQ(*plan->GetHavingClausePredicate(), *predicate);
+  EXPECT_FALSE(plan->RequiresCleanup());
+  EXPECT_TRUE(plan->GetMemoryAllocatingAggregatorIndexes().empty());
 
   planner::AggregatePlanNode::Builder builder2;
   auto nc_aggr = dynamic_cast<parser::AggregateExpression *>(aggr_term->Copy().release());
@@ -328,4 +331,4 @@ TEST(PlanNodeTest, CSVScanPlanTest) {
     EXPECT_NE(plan->Hash(), plan3->Hash());
   }
 }
-}  // namespace terrier::planner
+}  // namespace noisepage::planner

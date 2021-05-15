@@ -9,7 +9,7 @@
 #include "catalog/database_catalog.h"
 #include "catalog/postgres/pg_proc.h"
 
-namespace terrier::catalog {
+namespace noisepage::catalog {
 db_oid_t CatalogAccessor::GetDatabaseOid(std::string name) const {
   NormalizeObjectName(&name);
   return catalog_->GetDatabaseOid(txn_, name);
@@ -23,20 +23,20 @@ db_oid_t CatalogAccessor::CreateDatabase(std::string name) const {
 bool CatalogAccessor::DropDatabase(db_oid_t db) const { return catalog_->DeleteDatabase(txn_, db); }
 
 void CatalogAccessor::SetSearchPath(std::vector<namespace_oid_t> namespaces) {
-  TERRIER_ASSERT(!namespaces.empty(), "search path cannot be empty");
+  NOISEPAGE_ASSERT(!namespaces.empty(), "search path cannot be empty");
 
   default_namespace_ = namespaces[0];
   search_path_ = std::move(namespaces);
 
   // Check if 'pg_catalog is explicitly set'
-  for (auto &ns : search_path_)
-    if (ns == postgres::NAMESPACE_CATALOG_NAMESPACE_OID) return;
+  for (const auto &ns : search_path_)
+    if (ns == postgres::PgNamespace::NAMESPACE_CATALOG_NAMESPACE_OID) return;
 
-  search_path_.emplace(search_path_.begin(), postgres::NAMESPACE_CATALOG_NAMESPACE_OID);
+  search_path_.emplace(search_path_.begin(), postgres::PgNamespace::NAMESPACE_CATALOG_NAMESPACE_OID);
 }
 
 namespace_oid_t CatalogAccessor::GetNamespaceOid(std::string name) const {
-  if (name.empty()) return catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID;
+  if (name.empty()) return catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID;
   NormalizeObjectName(&name);
   return dbc_->GetNamespaceOid(txn_, name);
 }
@@ -50,7 +50,7 @@ bool CatalogAccessor::DropNamespace(namespace_oid_t ns) const { return dbc_->Del
 
 table_oid_t CatalogAccessor::GetTableOid(std::string name) const {
   NormalizeObjectName(&name);
-  for (auto &path : search_path_) {
+  for (const auto &path : search_path_) {
     table_oid_t search_result = dbc_->GetTableOid(txn_, path, name);
     if (search_result != INVALID_TABLE_OID) return search_result;
   }
@@ -116,14 +116,14 @@ std::vector<index_oid_t> CatalogAccessor::GetIndexOids(table_oid_t table) const 
 }
 
 std::vector<std::pair<common::ManagedPointer<storage::index::Index>, const IndexSchema &>> CatalogAccessor::GetIndexes(
-    table_oid_t table) {
+    const table_oid_t table) {
   return dbc_->GetIndexes(txn_, table);
 }
 
 index_oid_t CatalogAccessor::GetIndexOid(std::string name) const {
   NormalizeObjectName(&name);
-  for (auto &path : search_path_) {
-    index_oid_t search_result = dbc_->GetIndexOid(txn_, path, name);
+  for (const auto &path : search_path_) {
+    const index_oid_t search_result = dbc_->GetIndexOid(txn_, path, name);
     if (search_result != INVALID_INDEX_OID) return search_result;
   }
   return INVALID_INDEX_OID;
@@ -177,8 +177,8 @@ proc_oid_t CatalogAccessor::CreateProcedure(const std::string &procname, languag
                                             namespace_oid_t procns, const std::vector<std::string> &args,
                                             const std::vector<type_oid_t> &arg_types,
                                             const std::vector<type_oid_t> &all_arg_types,
-                                            const std::vector<postgres::ProArgModes> &arg_modes, type_oid_t rettype,
-                                            const std::string &src, bool is_aggregate) {
+                                            const std::vector<postgres::PgProc::ArgModes> &arg_modes,
+                                            type_oid_t rettype, const std::string &src, bool is_aggregate) {
   return dbc_->CreateProcedure(txn_, procname, language_oid, procns, args, arg_types, all_arg_types, arg_modes, rettype,
                                src, is_aggregate);
 }
@@ -196,16 +196,22 @@ proc_oid_t CatalogAccessor::GetProcOid(const std::string &procname, const std::v
   return catalog::INVALID_PROC_OID;
 }
 
-bool CatalogAccessor::SetProcCtxPtr(proc_oid_t proc_oid, const execution::functions::FunctionContext *func_context) {
-  return dbc_->SetProcCtxPtr(txn_, proc_oid, func_context);
-}
-
-common::ManagedPointer<execution::functions::FunctionContext> CatalogAccessor::GetProcCtxPtr(proc_oid_t proc_oid) {
-  return dbc_->GetProcCtxPtr(txn_, proc_oid);
+bool CatalogAccessor::SetFunctionContextPointer(proc_oid_t proc_oid,
+                                                const execution::functions::FunctionContext *func_context) {
+  return dbc_->SetFunctionContextPointer(txn_, proc_oid, func_context);
 }
 
 common::ManagedPointer<execution::functions::FunctionContext> CatalogAccessor::GetFunctionContext(proc_oid_t proc_oid) {
   return dbc_->GetFunctionContext(txn_, proc_oid);
+}
+
+std::unique_ptr<optimizer::ColumnStatsBase> CatalogAccessor::GetColumnStatistics(table_oid_t table_oid,
+                                                                                 col_oid_t col_oid) {
+  return dbc_->GetColumnStatistics(txn_, table_oid, col_oid);
+}
+
+optimizer::TableStats CatalogAccessor::GetTableStatistics(table_oid_t table_oid) {
+  return dbc_->GetTableStatistics(txn_, table_oid);
 }
 
 type_oid_t CatalogAccessor::GetTypeOidFromTypeId(type::TypeId type) { return dbc_->GetTypeOidForType(type); }
@@ -217,4 +223,4 @@ common::ManagedPointer<storage::BlockStore> CatalogAccessor::GetBlockStore() con
   return catalog_->GetBlockStore();
 }
 
-}  // namespace terrier::catalog
+}  // namespace noisepage::catalog

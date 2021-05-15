@@ -4,7 +4,7 @@
 #include <string>
 #include <utility>
 
-namespace terrier::parser {
+namespace noisepage::parser {
 
 constexpr int INVALID_TYPE_ID = 0;
 
@@ -25,7 +25,8 @@ enum class StatementType {
   ANALYZE = 15,
   VARIABLE_SET = 16,
   CREATE_FUNC = 17,
-  EXPLAIN = 18
+  EXPLAIN = 18,
+  VARIABLE_SHOW = 19,
 };
 
 enum class FKConstrMatchType { SIMPLE = 0, PARTIAL = 1, FULL = 2 };
@@ -60,6 +61,7 @@ enum class IndexType {
   INVALID = INVALID_TYPE_ID,
   BWTREE = 1,
   HASH = 2,
+  BPLUSTREE = 3,
 };
 
 enum class InsertType { INVALID = INVALID_TYPE_ID, VALUES = 1, SELECT = 2 };
@@ -76,4 +78,4 @@ enum class PLType {
 
 enum class AsType { INVALID = INVALID_TYPE_ID, EXECUTABLE = 1, QUERY_STRING = 2 };
 
-}  // namespace terrier::parser
+}  // namespace noisepage::parser

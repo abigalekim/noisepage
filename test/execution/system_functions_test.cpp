@@ -8,11 +8,12 @@
 #include "execution/sql/value.h"
 #include "execution/tpl_test.h"
 
-namespace terrier::execution::sql::test {
+namespace noisepage::execution::sql::test {
 
 class SystemFunctionsTests : public TplTest {
  public:
-  SystemFunctionsTests() : ctx_(catalog::db_oid_t(0), nullptr, nullptr, nullptr, nullptr, settings_) {}
+  SystemFunctionsTests()
+      : ctx_(catalog::db_oid_t(0), nullptr, nullptr, nullptr, nullptr, settings_, nullptr, DISABLED, DISABLED) {}
 
   exec::ExecutionContext *Ctx() { return &ctx_; }
 
@@ -28,4 +29,4 @@ TEST_F(SystemFunctionsTests, Version) {
   EXPECT_TRUE(StringVal(common::NOISEPAGE_VERSION_STR.data()) == result);
 }
 
-}  // namespace terrier::execution::sql::test
+}  // namespace noisepage::execution::sql::test

@@ -23,9 +23,9 @@
 // Make sure that if you create additional files, you call unlink on them after the test finishes. Otherwise, repeated
 // executions will read old test's data, and the cause of the errors will be hard to identify. Trust me it will drive
 // you nuts...
-#define LOG_FILE_NAME "./test.log"
+#define RECOVERY_TEST_LOG_FILE_NAME "./test_recovery_test.log"
 
-namespace terrier::storage {
+namespace noisepage::storage {
 class RecoveryTests : public TerrierTest {
  protected:
   std::default_random_engine generator_;
@@ -47,10 +47,10 @@ class RecoveryTests : public TerrierTest {
 
   void SetUp() override {
     // Unlink log file incase one exists from previous test iteration
-    unlink(LOG_FILE_NAME);
+    unlink(RECOVERY_TEST_LOG_FILE_NAME);
 
-    db_main_ = terrier::DBMain::Builder()
-                   .SetWalFilePath(LOG_FILE_NAME)
+    db_main_ = noisepage::DBMain::Builder()
+                   .SetWalFilePath(RECOVERY_TEST_LOG_FILE_NAME)
                    .SetUseLogging(true)
                    .SetUseGC(true)
                    .SetUseGCThread(true)
@@ -61,7 +61,7 @@ class RecoveryTests : public TerrierTest {
     block_store_ = db_main_->GetStorageLayer()->GetBlockStore();
     catalog_ = db_main_->GetCatalogLayer()->GetCatalog();
 
-    recovery_db_main_ = terrier::DBMain::Builder()
+    recovery_db_main_ = noisepage::DBMain::Builder()
                             .SetUseThreadRegistry(true)
                             .SetUseGC(true)
                             .SetUseGCThread(true)
@@ -77,7 +77,7 @@ class RecoveryTests : public TerrierTest {
 
   void TearDown() override {
     // Delete log file
-    unlink(LOG_FILE_NAME);
+    unlink(RECOVERY_TEST_LOG_FILE_NAME);
   }
 
   catalog::IndexSchema DummyIndexSchema() {
@@ -86,7 +86,7 @@ class RecoveryTests : public TerrierTest {
         "", type::TypeId::INTEGER, false,
         parser::ColumnValueExpression(catalog::db_oid_t(0), catalog::table_oid_t(0), catalog::col_oid_t(1)));
     StorageTestUtil::ForceOid(&(keycols[0]), catalog::indexkeycol_oid_t(1));
-    return catalog::IndexSchema(keycols, storage::index::IndexType::BWTREE, true, true, false, true);
+    return catalog::IndexSchema(keycols, storage::index::IndexType::BPLUSTREE, true, true, false, true);
   }
 
   catalog::db_oid_t CreateDatabase(transaction::TransactionContext *txn,
@@ -172,11 +172,12 @@ class RecoveryTests : public TerrierTest {
 
   // Most tests do a single recovery pass into the recovery DBMain
   void SingleRecovery() {
-    DiskLogProvider log_provider(LOG_FILE_NAME);
+    DiskLogProvider log_provider(RECOVERY_TEST_LOG_FILE_NAME);
     RecoveryManager recovery_manager{common::ManagedPointer<AbstractLogProvider>(&log_provider),
                                      recovery_catalog_,
                                      recovery_txn_manager_,
                                      recovery_deferred_action_manager_,
+                                     DISABLED,
                                      recovery_thread_registry_,
                                      recovery_block_store_};
     recovery_manager.StartRecovery();
@@ -192,11 +193,12 @@ class RecoveryTests : public TerrierTest {
     ShutdownAndRestartSystem();
 
     // Instantiate recovery manager, and recover the tables.
-    DiskLogProvider log_provider{LOG_FILE_NAME};
+    DiskLogProvider log_provider{RECOVERY_TEST_LOG_FILE_NAME};
     RecoveryManager recovery_manager{common::ManagedPointer<AbstractLogProvider>(&log_provider),
                                      recovery_catalog_,
                                      recovery_txn_manager_,
                                      recovery_deferred_action_manager_,
+                                     DISABLED,
                                      recovery_thread_registry_,
                                      recovery_block_store_};
     recovery_manager.StartRecovery();
@@ -310,7 +312,7 @@ TEST_F(RecoveryTests, DropDatabaseTest) {
 // NOLINTNEXTLINE
 TEST_F(RecoveryTests, DropTableTest) {
   std::string database_name = "testdb";
-  auto namespace_oid = catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID;
+  auto namespace_oid = catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID;
   std::string table_name = "testtable";
 
   // Create database, table, then drop the table
@@ -342,7 +344,7 @@ TEST_F(RecoveryTests, DropTableTest) {
 // NOLINTNEXTLINE
 TEST_F(RecoveryTests, DropIndexTest) {
   std::string database_name = "testdb";
-  auto namespace_oid = catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID;
+  auto namespace_oid = catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID;
   std::string table_name = "testtable";
   std::string index_name = "testindex";
 
@@ -509,7 +511,7 @@ TEST_F(RecoveryTests, UnrecoverableTransactionsTest) {
 // NOLINTNEXTLINE
 TEST_F(RecoveryTests, ConcurrentCatalogDDLChangesTest) {
   std::string database_name = "testdb";
-  auto namespace_oid = catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID;
+  auto namespace_oid = catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID;
   std::string table_name = "foo";
 
   // Begin T0, create database, create table foo, and commit
@@ -566,7 +568,7 @@ TEST_F(RecoveryTests, ConcurrentCatalogDDLChangesTest) {
 // NOLINTNEXTLINE
 TEST_F(RecoveryTests, ConcurrentDDLChangesTest) {
   std::string database_name = "testdb";
-  auto namespace_oid = catalog::postgres::NAMESPACE_DEFAULT_NAMESPACE_OID;
+  auto namespace_oid = catalog::postgres::PgNamespace::NAMESPACE_DEFAULT_NAMESPACE_OID;
   std::string table_name = "foo";
 
   // Begin T0, create database, create table foo, and commit
@@ -638,7 +640,7 @@ TEST_F(RecoveryTests, DoubleRecoveryTest) {
   ShutdownAndRestartSystem();
 
   // Override the recovery DBMain to now log out
-  recovery_db_main_ = terrier::DBMain::Builder()
+  recovery_db_main_ = noisepage::DBMain::Builder()
                           .SetWalFilePath(secondary_log_file)
                           .SetUseLogging(true)
                           .SetUseGC(true)
@@ -657,11 +659,12 @@ TEST_F(RecoveryTests, DoubleRecoveryTest) {
   //--------------------------------
 
   // Instantiate recovery manager, and recover the tables.
-  DiskLogProvider log_provider(LOG_FILE_NAME);
+  DiskLogProvider log_provider(RECOVERY_TEST_LOG_FILE_NAME);
   RecoveryManager recovery_manager{common::ManagedPointer<AbstractLogProvider>(&log_provider),
                                    recovery_catalog_,
                                    recovery_txn_manager_,
                                    recovery_deferred_action_manager_,
+                                   DISABLED,
                                    recovery_thread_registry_,
                                    recovery_block_store_};
   recovery_manager.StartRecovery();
@@ -703,7 +706,7 @@ TEST_F(RecoveryTests, DoubleRecoveryTest) {
   log_manager_->Start();
 
   // Create a new DBMain with logging disabled
-  auto secondary_recovery_db_main = terrier::DBMain::Builder()
+  auto secondary_recovery_db_main = noisepage::DBMain::Builder()
                                         .SetUseThreadRegistry(true)
                                         .SetUseGC(true)
                                         .SetUseGCThread(true)
@@ -722,7 +725,7 @@ TEST_F(RecoveryTests, DoubleRecoveryTest) {
   DiskLogProvider secondary_log_provider(secondary_log_file);
   RecoveryManager secondary_recovery_manager(common::ManagedPointer<AbstractLogProvider>(&secondary_log_provider),
                                              secondary_recovery_catalog, secondary_recovery_txn_manager,
-                                             secondary_recovery_deferred_action_manager,
+                                             secondary_recovery_deferred_action_manager, DISABLED,
                                              secondary_recovery_thread_registry, secondary_recovery_block_store);
   secondary_recovery_manager.StartRecovery();
   secondary_recovery_manager.WaitForRecoveryToFinish();
@@ -767,4 +770,4 @@ TEST_F(RecoveryTests, DoubleRecoveryTest) {
       [=]() { unlink(secondary_log_file.c_str()); });
 }
 
-}  // namespace terrier::storage
+}  // namespace noisepage::storage

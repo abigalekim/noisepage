@@ -13,18 +13,22 @@
 #include "execution/vm/llvm_engine.h"
 #include "planner/plannodes/csv_scan_plan_node.h"
 
-namespace terrier::execution::sql::codegen::test {
+namespace noisepage::execution::sql::codegen::test {
 
 using namespace std::chrono_literals;  // NOLINT
 
 class CSVScanTranslatorTest : public SqlBasedTest {
  protected:
   void SetUp() override { SqlBasedTest::SetUp(); }
-  static void SetUpTestSuite() { terrier::execution::vm::LLVMEngine::Initialize(); }
-  static void TearDownTestSuite() { terrier::execution::vm::LLVMEngine::Shutdown(); }
+  static void SetUpTestSuite() {
+    auto settings = std::make_unique<noisepage::execution::vm::LLVMEngine::Settings>(bytecode_handlers_path_);
+    noisepage::execution::vm::LLVMEngine::Initialize(std::move(settings));
+  }
+  static void TearDownTestSuite() { noisepage::execution::vm::LLVMEngine::Shutdown(); }
 
  private:
   tbb::task_scheduler_init anonymous_;
+  static constexpr const char* const bytecode_handlers_path_{"../bin/bytecode_handlers_ir.bc"};
 };
 
 // NOLINTNEXTLINE
@@ -38,7 +42,7 @@ TEST_F(CSVScanTranslatorTest, ManyTypesTest) {
     auto col2 = expr_maker.CVE(catalog::col_oid_t(1), type::TypeId::SMALLINT);
     auto col3 = expr_maker.CVE(catalog::col_oid_t(2), type::TypeId::INTEGER);
     auto col4 = expr_maker.CVE(catalog::col_oid_t(3), type::TypeId::BIGINT);
-    auto col5 = expr_maker.CVE(catalog::col_oid_t(4), type::TypeId::DECIMAL);
+    auto col5 = expr_maker.CVE(catalog::col_oid_t(4), type::TypeId::REAL);
     auto col6 = expr_maker.CVE(catalog::col_oid_t(5), type::TypeId::VARCHAR);
 
     seq_scan_out.AddOutput("col1", col1);
@@ -77,5 +81,5 @@ TEST_F(CSVScanTranslatorTest, ManyTypesTest) {
   multi_checker.CheckCorrectness();
 }
 
-}  // namespace terrier::execution::sql::codegen::test
+}  // namespace noisepage::execution::sql::codegen::test
 #endif

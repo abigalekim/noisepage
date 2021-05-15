@@ -2,14 +2,15 @@
 
 #include "common/json.h"
 
-namespace terrier::catalog {
+namespace noisepage::catalog {
 
 nlohmann::json IndexSchema::Column::ToJson() const {
   nlohmann::json j;
   j["name"] = name_;
-  j["type"] = Type();
-  j["max_varlen_size"] = MaxVarlenSize();
-  j["nullable"] = Nullable();
+  j["type"] = type_;
+  j["attr_length"] = attr_length_;
+  j["type_modifier"] = type_modifier_;
+  j["nullable"] = nullable_;
   j["oid"] = oid_;
   j["definition"] = definition_->ToJson();
   return j;
@@ -17,10 +18,11 @@ nlohmann::json IndexSchema::Column::ToJson() const {
 
 std::vector<std::unique_ptr<parser::AbstractExpression>> IndexSchema::Column::FromJson(const nlohmann::json &j) {
   name_ = j.at("name").get<std::string>();
-  SetTypeId(j.at("type").get<type::TypeId>());
-  SetMaxVarlenSize(j.at("max_varlen_size").get<uint16_t>());
-  SetNullable(j.at("nullable").get<bool>());
-  SetOid(j.at("oid").get<indexkeycol_oid_t>());
+  type_ = j.at("type").get<type::TypeId>();
+  attr_length_ = j.at("attr_length").get<uint16_t>();
+  type_modifier_ = j.at("type_modifier").get<int32_t>();
+  nullable_ = j.at("nullable").get<bool>();
+  oid_ = j.at("oid").get<indexkeycol_oid_t>();
   auto deserialized = parser::DeserializeExpression(j.at("definition"));
   definition_ = std::move(deserialized.result_);
   return std::move(deserialized.non_owned_exprs_);
@@ -39,7 +41,7 @@ nlohmann::json IndexSchema::ToJson() const {
 }
 
 void IndexSchema::FromJson(const nlohmann::json &j) {
-  TERRIER_ASSERT(false, "Schema::FromJson should never be invoked directly; use DeserializeSchema");
+  NOISEPAGE_ASSERT(false, "Schema::FromJson should never be invoked directly; use DeserializeSchema");
 }
 
 std::unique_ptr<IndexSchema> IndexSchema::DeserializeSchema(const nlohmann::json &j) {
@@ -59,4 +61,4 @@ std::unique_ptr<IndexSchema> IndexSchema::DeserializeSchema(const nlohmann::json
 DEFINE_JSON_BODY_DECLARATIONS(IndexSchema::Column);
 DEFINE_JSON_BODY_DECLARATIONS(IndexSchema);
 
-}  // namespace terrier::catalog
+}  // namespace noisepage::catalog

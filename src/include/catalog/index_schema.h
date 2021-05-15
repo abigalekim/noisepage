@@ -16,25 +16,22 @@
 #include "type/type_id.h"
 #include "type/type_util.h"
 
-namespace terrier {
+namespace noisepage {
 class StorageTestUtil;
 class TpccPlanTest;
-}  // namespace terrier
+}  // namespace noisepage
 
-namespace terrier::storage {
+namespace noisepage::storage {
 class RecoveryManager;
-}
+}  // namespace noisepage::storage
 
-namespace terrier::tpcc {
-class Schemas;
-}
-
-namespace terrier::catalog {
+namespace noisepage::catalog {
 class DatabaseCatalog;
 
 namespace postgres {
 class Builder;
-}
+class PgCoreImpl;
+}  // namespace postgres
 
 /**
  * A schema for an index.  It contains the definitions for the columns in the
@@ -47,36 +44,44 @@ class IndexSchema {
    */
   class Column {
    public:
+    // TODO(Matt): does having two constructors even make sense anymore?
+
     /**
      * Non-varlen constructor for index key columns.
      * @param name column name (column name or "expr")
-     * @param type_id the non-varlen type of the column
+     * @param type the non-varlen type of the column
      * @param nullable whether the column is nullable
      * @param definition definition of this attribute
      */
-    Column(std::string name, type::TypeId type_id, bool nullable, const parser::AbstractExpression &definition)
-        : name_(std::move(name)), oid_(INVALID_INDEXKEYCOL_OID), packed_type_(0), definition_(definition.Copy()) {
-      TERRIER_ASSERT(!(type_id == type::TypeId::VARCHAR || type_id == type::TypeId::VARBINARY),
-                     "Non-varlen constructor.");
-      SetTypeId(type_id);
-      SetNullable(nullable);
+    Column(std::string name, const type::TypeId type, const bool nullable, const parser::AbstractExpression &definition)
+        : name_(std::move(name)),
+          type_(type),
+          attr_length_(type::TypeUtil::GetTypeSize(type_)),
+          nullable_(nullable),
+          oid_(INVALID_INDEXKEYCOL_OID),
+          definition_(definition.Copy()) {
+      Validate();
     }
 
     /**
      * Varlen constructor for index key columns.
      * @param name column name (column name or "expr")
-     * @param type_id the varlen type of the column
-     * @param max_varlen_size the maximum varlen size
+     * @param type the varlen type of the column
+     * @param type_modifier the maximum varlen size or precision for decimal
      * @param nullable whether the column is nullable
      * @param definition definition of this attribute
      */
-    Column(std::string name, type::TypeId type_id, uint16_t max_varlen_size, bool nullable,
+    Column(std::string name, const type::TypeId type, const int32_t type_modifier, const bool nullable,
            const parser::AbstractExpression &definition)
-        : name_(std::move(name)), oid_(INVALID_INDEXKEYCOL_OID), packed_type_(0), definition_(definition.Copy()) {
-      TERRIER_ASSERT(type_id == type::TypeId::VARCHAR || type_id == type::TypeId::VARBINARY, "Varlen constructor.");
-      SetTypeId(type_id);
-      SetNullable(nullable);
-      SetMaxVarlenSize(max_varlen_size);
+        : name_(std::move(name)),
+          type_(type),
+          attr_length_(type::TypeUtil::GetTypeSize(type_)),
+          type_modifier_(type_modifier == -1 ? 0 : type_modifier),  // TODO(Matt): this is a hack around unlimited
+                                                                    // length varlens and is likely busted elsewhere
+          nullable_(nullable),
+          oid_(INVALID_INDEXKEYCOL_OID),
+          definition_(definition.Copy()) {
+      Validate();
     }
 
     /**
@@ -85,9 +90,14 @@ class IndexSchema {
      */
     Column(const Column &old_column)
         : name_(old_column.name_),
+          type_(old_column.type_),
+          attr_length_(old_column.attr_length_),
+          type_modifier_(old_column.type_modifier_),
+          nullable_(old_column.nullable_),
           oid_(old_column.oid_),
-          packed_type_(old_column.packed_type_),
-          definition_(old_column.definition_->Copy()) {}
+          definition_(old_column.definition_->Copy()) {
+      Validate();
+    }
 
     /**
      * Allows operator= to call Column's custom copy-constructor.
@@ -96,9 +106,13 @@ class IndexSchema {
      */
     Column &operator=(const Column &col) {
       name_ = col.name_;
+      type_ = col.type_;
+      attr_length_ = col.attr_length_;
+      type_modifier_ = col.type_modifier_;
+      nullable_ = col.nullable_;
       oid_ = col.oid_;
-      packed_type_ = col.packed_type_;
       definition_ = col.definition_->Copy();
+      Validate();
       return *this;
     }
 
@@ -118,27 +132,25 @@ class IndexSchema {
     common::ManagedPointer<const parser::AbstractExpression> StoredExpression() const {
       return common::ManagedPointer(static_cast<const parser::AbstractExpression *>(definition_.get()));
     }
-
     /**
-     * @warning only defined for varlen types
-     * @return maximum varlen size of this varlen column
+     * @return true if the column is nullable, false otherwise
      */
-    uint16_t MaxVarlenSize() const { return static_cast<uint16_t>((packed_type_ & MASK_VARLEN) >> OFFSET_VARLEN); }
+    bool Nullable() const { return nullable_; }
 
     /**
      * @return size of the attribute in bytes. Varlen attributes have the sign bit set.
      */
-    uint8_t AttrSize() const { return type::TypeUtil::GetTypeSize(Type()); }
+    uint16_t AttributeLength() const { return attr_length_; }
 
     /**
-     * @return type of this key column
+     * @return The maximum length of this column (only valid if it's VARLEN)
      */
-    type::TypeId Type() const { return static_cast<type::TypeId>(packed_type_ & MASK_TYPE); }
+    int32_t TypeModifier() const { return type_modifier_; }
 
     /**
-     * @return true if this column is nullable
+     * @return SQL type for this column
      */
-    bool Nullable() const { return static_cast<bool>(packed_type_ & MASK_NULLABLE); }
+    type::TypeId Type() const { return type_; }
 
     /**
      * Default constructor for deserialization
@@ -151,9 +163,9 @@ class IndexSchema {
     common::hash_t Hash() const {
       common::hash_t hash = common::HashUtil::Hash(name_);
       hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(name_));
-      hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(Type()));
-      hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(MaxVarlenSize()));
-      hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(Nullable()));
+      hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(type_));
+      hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(type_modifier_));
+      hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(nullable_));
       hash = common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(oid_));
       if (definition_ != nullptr) hash = common::HashUtil::CombineHashes(hash, definition_->Hash());
       return hash;
@@ -166,9 +178,12 @@ class IndexSchema {
      */
     bool operator==(const Column &rhs) const {
       if (name_ != rhs.name_) return false;
-      if (Type() != rhs.Type()) return false;
-      if (MaxVarlenSize() != rhs.MaxVarlenSize()) return false;
-      if (Nullable() != rhs.Nullable()) return false;
+      if (type_ != rhs.type_) return false;
+      if (attr_length_ != rhs.attr_length_) return false;
+      if ((ShouldHaveTypeModifier() != rhs.ShouldHaveTypeModifier()) ||
+          ((ShouldHaveTypeModifier() && rhs.ShouldHaveTypeModifier()) && type_modifier_ != rhs.type_modifier_))
+        return false;
+      if (nullable_ != rhs.nullable_) return false;
       if (oid_ != rhs.oid_) return false;
       if (definition_ == nullptr) return rhs.definition_ == nullptr;
       return rhs.definition_ != nullptr && *definition_ == *rhs.definition_;
@@ -193,40 +208,55 @@ class IndexSchema {
     std::vector<std::unique_ptr<parser::AbstractExpression>> FromJson(const nlohmann::json &j);
 
    private:
-    static constexpr uint32_t MASK_VARLEN = 0x00FFFF00;
-    static constexpr uint32_t MASK_NULLABLE = 0x00000080;
-    static constexpr uint32_t MASK_TYPE = 0x0000007F;
-    static constexpr uint32_t OFFSET_VARLEN = 8;
+    bool ShouldHaveTypeModifier() const {
+      return type_ == type::TypeId::VARCHAR || type_ == type::TypeId::VARBINARY || type_ == type::TypeId::DECIMAL;
+    }
+
+    void Validate() const {
+      NOISEPAGE_ASSERT(type_ != type::TypeId::INVALID, "Attribute type cannot be INVALID.");
+      NOISEPAGE_ASSERT(definition_ != nullptr, "Definition cannot be nullptr.");
+
+      if (type_ == type::TypeId::VARCHAR || type_ == type::TypeId::VARBINARY) {
+        NOISEPAGE_ASSERT(attr_length_ == storage::VARLEN_COLUMN, "Invalid attribute length.");
+        // TODO(Matt): uncomment this assertion once we decide what a reasonable default is for unlimited varlens
+
+        //        NOISEPAGE_ASSERT(type_modifier_ == -1 || type_modifier_ > 0,
+        //                         "Type modifier should be -1 (no limit), or a positive integer.");
+      } else if (type_ == type::TypeId::DECIMAL) {
+        NOISEPAGE_ASSERT(attr_length_ == 16, "Invalid attribute length.");
+        NOISEPAGE_ASSERT(type_modifier_ > 0, "Type modifier should be a  positive integer.");
+      } else {
+        NOISEPAGE_ASSERT(attr_length_ == 1 || attr_length_ == 2 || attr_length_ == 4 || attr_length_ == 8,
+                         "Invalid attribute length.");
+        NOISEPAGE_ASSERT(type_modifier_ == -1, "Invalid attribute modifier. Should be -1 for types that don't use it.");
+      }
+    }
 
     std::string name_;
+    type::TypeId type_;
+    uint16_t attr_length_;
+    int32_t type_modifier_ = -1;  // corresponds to Postgres' atttypmod int4: atttypmod records type-specific data
+    // supplied at table creation time (for example, the maximum length of a varchar
+    // column). It is passed to type-specific input functions and length coercion
+    // functions. The value will generally be -1 for types that do not need atttypmod.
+    bool nullable_;
     indexkeycol_oid_t oid_;
-    uint32_t packed_type_;
 
     std::unique_ptr<parser::AbstractExpression> definition_;
 
     // TODO(John): Should these "OIDS" be implicitly set by the index in the columns?
     void SetOid(indexkeycol_oid_t oid) { oid_ = oid; }
 
-    void SetMaxVarlenSize(uint16_t max_varlen_size) {
-      TERRIER_ASSERT((packed_type_ & MASK_VARLEN) == 0, "Should only set max varlen size once.");
-      const auto varlen_bits = (max_varlen_size << OFFSET_VARLEN) & MASK_VARLEN;
-      packed_type_ = packed_type_ | varlen_bits;
-    }
+    void SetTypeModifier(const int32_t type_modifier) { type_modifier_ = type_modifier; }
 
-    void SetTypeId(type::TypeId type_id) {
-      TERRIER_ASSERT((packed_type_ & MASK_TYPE) == 0, "Should only set type once.");
-      packed_type_ = packed_type_ | (static_cast<uint32_t>(type_id) & MASK_TYPE);
-    }
+    void SetTypeId(const type::TypeId type) { type_ = type; }
 
-    void SetNullable(bool nullable) {
-      TERRIER_ASSERT((packed_type_ & MASK_NULLABLE) == 0, "Should only set nullability once.");
-      packed_type_ = nullable ? packed_type_ | MASK_NULLABLE : packed_type_;
-    }
+    void SetNullable(const bool nullable) { nullable_ = nullable; }
 
     friend class DatabaseCatalog;
     friend class postgres::Builder;
-    friend class tpcc::Schemas;
-    friend class terrier::StorageTestUtil;
+    friend class postgres::PgCoreImpl;
+    friend class noisepage::StorageTestUtil;
   };
 
   /**
@@ -246,7 +276,7 @@ class IndexSchema {
         is_primary_(is_primary),
         is_exclusion_(is_exclusion),
         is_immediate_(is_immediate) {
-    TERRIER_ASSERT((is_primary && is_unique) || (!is_primary), "is_primary requires is_unique to be true as well.");
+    NOISEPAGE_ASSERT((is_primary && is_unique) || (!is_primary), "is_primary requires is_unique to be true as well.");
     ExtractIndexedColOids();
   }
 
@@ -269,12 +299,12 @@ class IndexSchema {
    * @throw std::out_of_range if the column doesn't exist.
    */
   const Column &GetColumn(const std::string &name) const {
-    for (auto &c : columns_) {
+    for (const auto &c : columns_) {
       if (c.Name() == name) {
         return c;
       }
     }
-    // TODO(John): Should this be a TERRIER_ASSERT to have the same semantics
+    // TODO(John): Should this be a NOISEPAGE_ASSERT to have the same semantics
     // as the other accessor methods above?
     throw std::out_of_range("Column name doesn't exist");
   }
@@ -315,7 +345,7 @@ class IndexSchema {
   nlohmann::json ToJson() const;
 
   /**
-   * Should not be used. See TERRIER_ASSERT
+   * Should not be used. See NOISEPAGE_ASSERT
    */
   void FromJson(const nlohmann::json &j);
 
@@ -330,8 +360,8 @@ class IndexSchema {
    * @return map of index key oid to col_oid contained in that index key
    */
   const std::vector<col_oid_t> &GetIndexedColOids() const {
-    TERRIER_ASSERT(!indexed_oids_.empty(),
-                   "The indexed oids map should not be empty. Was ExtractIndexedColOids called before?");
+    NOISEPAGE_ASSERT(!indexed_oids_.empty(),
+                     "The indexed oids map should not be empty. Was ExtractIndexedColOids called before?");
     return indexed_oids_;
   }
 
@@ -345,8 +375,8 @@ class IndexSchema {
     std::deque<common::ManagedPointer<const parser::AbstractExpression>> expr_queue;
 
     // Traverse expression tree for each index key
-    for (auto &col : GetColumns()) {
-      TERRIER_ASSERT(col.StoredExpression() != nullptr, "Index column expr should not be missing");
+    for (const auto &col : GetColumns()) {
+      NOISEPAGE_ASSERT(col.StoredExpression() != nullptr, "Index column expr should not be missing");
       // Add root of expression of tree for the column
       expr_queue.push_back(col.StoredExpression());
 
@@ -362,7 +392,7 @@ class IndexSchema {
 
         // Add children to queue
         for (const auto &child : expr->GetChildren()) {
-          TERRIER_ASSERT(child != nullptr, "We should not be adding missing expressions to the queue");
+          NOISEPAGE_ASSERT(child != nullptr, "We should not be adding missing expressions to the queue");
           expr_queue.emplace_back(child.CastManagedPointerTo<const parser::AbstractExpression>());
         }
       }
@@ -408,7 +438,12 @@ class IndexSchema {
   bool operator!=(const IndexSchema &rhs) const { return !operator==(rhs); }
 
  private:
+  friend class Catalog;
   friend class DatabaseCatalog;
+  friend class postgres::Builder;
+  friend class postgres::PgCoreImpl;
+  friend class noisepage::TpccPlanTest;
+
   std::vector<Column> columns_;
   storage::index::IndexType type_;
   std::vector<col_oid_t> indexed_oids_;
@@ -416,13 +451,9 @@ class IndexSchema {
   bool is_primary_;
   bool is_exclusion_;
   bool is_immediate_;
-
-  friend class Catalog;
-  friend class postgres::Builder;
-  friend class terrier::TpccPlanTest;
 };
 
 DEFINE_JSON_HEADER_DECLARATIONS(IndexSchema::Column);
 DEFINE_JSON_HEADER_DECLARATIONS(IndexSchema);
 
-}  // namespace terrier::catalog
+}  // namespace noisepage::catalog

@@ -14,7 +14,7 @@
 #include "optimizer/operator_visitor.h"
 #include "parser/expression/abstract_expression.h"
 
-namespace terrier::optimizer {
+namespace noisepage::optimizer {
 
 //===--------------------------------------------------------------------===//
 // TableFreeScan
@@ -84,7 +84,8 @@ BaseOperatorNodeContents *IndexScan::Copy() const { return new IndexScan(*this);
 Operator IndexScan::Make(catalog::db_oid_t database_oid, catalog::table_oid_t tbl_oid, catalog::index_oid_t index_oid,
                          std::vector<AnnotatedExpression> &&predicates, bool is_for_update,
                          planner::IndexScanType scan_type,
-                         std::unordered_map<catalog::indexkeycol_oid_t, std::vector<planner::IndexExpression>> bounds) {
+                         std::unordered_map<catalog::indexkeycol_oid_t, std::vector<planner::IndexExpression>> bounds,
+                         bool cover_all_columns) {
   auto *scan = new IndexScan();
   scan->database_oid_ = database_oid;
   scan->tbl_oid_ = tbl_oid;
@@ -93,6 +94,7 @@ Operator IndexScan::Make(catalog::db_oid_t database_oid, catalog::table_oid_t tb
   scan->predicates_ = std::move(predicates);
   scan->scan_type_ = scan_type;
   scan->bounds_ = std::move(bounds);
+  scan->cover_all_columns_ = cover_all_columns;
   return Operator(common::ManagedPointer<BaseOperatorNodeContents>(scan));
 }
 
@@ -635,13 +637,12 @@ BaseOperatorNodeContents *Insert::Copy() const { return new Insert(*this); }
 
 Operator Insert::Make(catalog::db_oid_t database_oid, catalog::table_oid_t table_oid,
                       std::vector<catalog::col_oid_t> &&columns,
-                      std::vector<std::vector<common::ManagedPointer<parser::AbstractExpression>>> &&values,
-                      std::vector<catalog::index_oid_t> &&index_oids) {
+                      std::vector<std::vector<common::ManagedPointer<parser::AbstractExpression>>> &&values) {
 #ifndef NDEBUG
   // We need to check whether the number of values for each insert vector
   // matches the number of columns
   for (const auto &insert_vals : values) {
-    TERRIER_ASSERT(columns.size() == insert_vals.size(), "Mismatched number of columns and values");
+    NOISEPAGE_ASSERT(columns.size() == insert_vals.size(), "Mismatched number of columns and values");
   }
 #endif
 
@@ -650,7 +651,6 @@ Operator Insert::Make(catalog::db_oid_t database_oid, catalog::table_oid_t table
   op->table_oid_ = table_oid;
   op->columns_ = std::move(columns);
   op->values_ = std::move(values);
-  op->index_oids_ = std::move(index_oids);
   return Operator(common::ManagedPointer<BaseOperatorNodeContents>(op));
 }
 
@@ -684,11 +684,11 @@ bool Insert::operator==(const BaseOperatorNodeContents &r) {
 BaseOperatorNodeContents *InsertSelect::Copy() const { return new InsertSelect(*this); }
 
 Operator InsertSelect::Make(catalog::db_oid_t database_oid, catalog::table_oid_t table_oid,
-                            std::vector<catalog::index_oid_t> &&index_oids) {
+                            std::vector<catalog::col_oid_t> &&columns) {
   auto *insert_op = new InsertSelect();
   insert_op->database_oid_ = database_oid;
   insert_op->table_oid_ = table_oid;
-  insert_op->index_oids_ = index_oids;
+  insert_op->columns_ = std::move(columns);
   return Operator(common::ManagedPointer<BaseOperatorNodeContents>(insert_op));
 }
 
@@ -1133,8 +1133,8 @@ Operator CreateFunction::Make(catalog::db_oid_t database_oid, catalog::namespace
                               std::vector<std::string> &&function_body, std::vector<std::string> &&function_param_names,
                               std::vector<parser::BaseFunctionParameter::DataType> &&function_param_types,
                               parser::BaseFunctionParameter::DataType return_type, size_t param_count, bool replace) {
-  TERRIER_ASSERT(function_param_names.size() == param_count && function_param_types.size() == param_count,
-                 "Mismatched number of items in vector and number of function parameters");
+  NOISEPAGE_ASSERT(function_param_names.size() == param_count && function_param_types.size() == param_count,
+                   "Mismatched number of items in vector and number of function parameters");
   auto *op = new CreateFunction();
   op->database_oid_ = database_oid;
   op->namespace_oid_ = namespace_oid;
@@ -1362,12 +1362,6 @@ bool Analyze::operator==(const BaseOperatorNodeContents &r) {
 }
 
 //===--------------------------------------------------------------------===//
-template <typename T>
-void OperatorNodeContents<T>::Accept(common::ManagedPointer<OperatorVisitor> v) const {
-  v->Visit(reinterpret_cast<const T *>(this));
-}
-
-//===--------------------------------------------------------------------===//
 template <>
 const char *OperatorNodeContents<TableFreeScan>::name = "TableFreeScan";
 template <>
@@ -1527,14 +1521,4 @@ OpType OperatorNodeContents<DropView>::type = OpType::DROPVIEW;
 template <>
 OpType OperatorNodeContents<Analyze>::type = OpType::ANALYZE;
 
-template <typename T>
-bool OperatorNodeContents<T>::IsLogical() const {
-  return type < OpType::LOGICALPHYSICALDELIMITER;
-}
-
-template <typename T>
-bool OperatorNodeContents<T>::IsPhysical() const {
-  return type > OpType::LOGICALPHYSICALDELIMITER;
-}
-
-}  // namespace terrier::optimizer
+}  // namespace noisepage::optimizer

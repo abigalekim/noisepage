@@ -7,7 +7,7 @@
 #include "optimizer/operator_visitor.h"
 #include "optimizer/property_set.h"
 
-namespace terrier {
+namespace noisepage {
 
 namespace catalog {
 class CatalogAccessor;
@@ -270,6 +270,12 @@ class ChildPropertyDeriver : public OperatorVisitor {
    */
   void Visit(const DropView *drop_view) override;
 
+  /**
+   * Visit an Analyze operator
+   * @param analyze analyze operator
+   */
+  void Visit(const Analyze *analyze) override;
+
  private:
   /**
    * Derives properties for a JOIN
@@ -304,4 +310,4 @@ class ChildPropertyDeriver : public OperatorVisitor {
 };
 
 }  // namespace optimizer
-}  // namespace terrier
+}  // namespace noisepage

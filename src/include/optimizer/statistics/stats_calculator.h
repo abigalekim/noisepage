@@ -12,7 +12,7 @@
 #include "parser/expression/column_value_expression.h"
 #include "transaction/transaction_context.h"
 
-namespace terrier::optimizer {
+namespace noisepage::optimizer {
 
 /**
  * Derive stats for the root group using a group expression's children's stats
@@ -22,10 +22,9 @@ class StatsCalculator : public OperatorVisitor {
   /**
    * Calculates stats for a logical GroupExpression
    * @param gexpr GroupExpression
-   * @param required_cols Required column statistics
    * @param context OptimizerContext
    */
-  void CalculateStats(GroupExpression *gexpr, ExprSet required_cols, OptimizerContext *context);
+  void CalculateStats(GroupExpression *gexpr, OptimizerContext *context);
 
   /**
    * Visit a LogicalGet
@@ -46,6 +45,12 @@ class StatsCalculator : public OperatorVisitor {
   void Visit(const LogicalInnerJoin *op) override;
 
   /**
+   * Visit a LogicalSemiJoin
+   * @param op Operator being visited
+   */
+  void Visit(const LogicalSemiJoin *op) override;
+
+  /**
    * Visit a LogicalAggregateAndGroupBy
    * @param op Operator being visited
    */
@@ -57,47 +62,45 @@ class StatsCalculator : public OperatorVisitor {
    */
   void Visit(const LogicalLimit *op) override;
 
- private:
   /**
-   * Add the base table stats if the base table maintain stats, or else
-   * use default stats
-   * @param col The column we want to get stats
-   * @param table_stats Base table stats
-   * @param stats The stats map to add
+   * Visit a LogicalInsert
+   * @param op Operator being visited
    */
-  void AddBaseTableStats(common::ManagedPointer<parser::AbstractExpression> col,
-                         common::ManagedPointer<TableStats> table_stats,
-                         std::unordered_map<std::string, std::unique_ptr<ColumnStats>> *stats);
+  void Visit(const LogicalInsert *op) override;
 
   /**
+   * Visit a LogicalUpdate
+   * @param op Operator being visited
+   */
+  void Visit(const LogicalUpdate *op) override;
+
+  /**
+   * Visit a LogicalDelete
+   * @param op Operator being visited
+   */
+  void Visit(const LogicalDelete *op) override;
+
+ private:
+  /**
    * Return estimated cardinality for a filter
+   * @param group The Group to estimated the cardinality for
    * @param num_rows Number of rows of base table
    * @param predicate_stats The stats for columns in the expression
    * @param predicates conjunction predicates
    * @returns Estimated cardinality
    */
-  size_t EstimateCardinalityForFilter(
-      size_t num_rows, const std::unordered_map<std::string, std::unique_ptr<ColumnStats>> &predicate_stats,
-      const std::vector<AnnotatedExpression> &predicates);
+  size_t EstimateCardinalityForFilter(Group *group, size_t num_rows, const TableStats &predicate_stats,
+                                      const std::vector<AnnotatedExpression> &predicates);
 
   /**
    * Calculates selectivity for predicate
+   * @param group The Group to calculate selectivity for
    * @param predicate_table_stats Table Statistics
    * @param expr Predicate
    * @returns selectivity estimate
    */
-  double CalculateSelectivityForPredicate(common::ManagedPointer<TableStats> predicate_table_stats,
+  double CalculateSelectivityForPredicate(Group *group, const TableStats &predicate_table_stats,
                                           common::ManagedPointer<parser::AbstractExpression> expr);
-
-  /**
-   * Creates default ColumnStats
-   * @param col ColumnValueExpression
-   */
-  std::unique_ptr<ColumnStats> CreateDefaultStats(common::ManagedPointer<parser::ColumnValueExpression> tv_expr) {
-    return std::make_unique<ColumnStats>(tv_expr->GetDatabaseOid(), tv_expr->GetTableOid(), tv_expr->GetColumnOid(), 0,
-                                         0.F, false, std::vector<double>{}, std::vector<double>{},
-                                         std::vector<double>{}, true);
-  }
 
   /**
    * GroupExpression
@@ -105,14 +108,9 @@ class StatsCalculator : public OperatorVisitor {
   GroupExpression *gexpr_;
 
   /**
-   * Required column statistics to generate
-   */
-  ExprSet required_cols_;
-
-  /**
    * Metadata
    */
   OptimizerContext *context_;
 };
 
-}  // namespace terrier::optimizer
+}  // namespace noisepage::optimizer

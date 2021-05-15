@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include "binder/sql_node_visitor.h"
 #include "common/hash_util.h"
 #include "common/json.h"
 #include "execution/sql/runtime_types.h"
@@ -12,8 +13,9 @@
 #include "execution/sql/value_util.h"
 #include "parser/expression/abstract_expression.h"
 #include "spdlog/fmt/fmt.h"
+#include "type/type_util.h"
 
-namespace terrier::parser {
+namespace noisepage::parser {
 
 template <typename T>
 ConstantValueExpression::ConstantValueExpression(const type::TypeId type, const T value)
@@ -29,25 +31,25 @@ ConstantValueExpression::ConstantValueExpression(const type::TypeId type, const 
 
 void ConstantValueExpression::Validate() const {
   if (std::holds_alternative<execution::sql::Val>(value_)) {
-    TERRIER_ASSERT(
+    NOISEPAGE_ASSERT(
         std::get<execution::sql::Val>(value_).is_null_,
         "Should have only constructed a base-type Val in the event of a NULL (likely coming out of PostgresParser).");
   } else if (std::holds_alternative<execution::sql::BoolVal>(value_)) {
-    TERRIER_ASSERT(return_value_type_ == type::TypeId::BOOLEAN, "Invalid TypeId for Val type.");
+    NOISEPAGE_ASSERT(return_value_type_ == type::TypeId::BOOLEAN, "Invalid TypeId for Val type.");
   } else if (std::holds_alternative<execution::sql::Integer>(value_)) {
-    TERRIER_ASSERT(return_value_type_ == type::TypeId::TINYINT || return_value_type_ == type::TypeId::SMALLINT ||
-                       return_value_type_ == type::TypeId::INTEGER || return_value_type_ == type::TypeId::BIGINT,
-                   "Invalid TypeId for Val type.");
+    NOISEPAGE_ASSERT(return_value_type_ == type::TypeId::TINYINT || return_value_type_ == type::TypeId::SMALLINT ||
+                         return_value_type_ == type::TypeId::INTEGER || return_value_type_ == type::TypeId::BIGINT,
+                     "Invalid TypeId for Val type.");
   } else if (std::holds_alternative<execution::sql::Real>(value_)) {
-    TERRIER_ASSERT(return_value_type_ == type::TypeId::DECIMAL, "Invalid TypeId for Val type.");
+    NOISEPAGE_ASSERT(return_value_type_ == type::TypeId::REAL, "Invalid TypeId for Val type.");
   } else if (std::holds_alternative<execution::sql::DateVal>(value_)) {
-    TERRIER_ASSERT(return_value_type_ == type::TypeId::DATE, "Invalid TypeId for Val type.");
+    NOISEPAGE_ASSERT(return_value_type_ == type::TypeId::DATE, "Invalid TypeId for Val type.");
   } else if (std::holds_alternative<execution::sql::TimestampVal>(value_)) {
-    TERRIER_ASSERT(return_value_type_ == type::TypeId::TIMESTAMP, "Invalid TypeId for Val type.");
+    NOISEPAGE_ASSERT(return_value_type_ == type::TypeId::TIMESTAMP, "Invalid TypeId for Val type.");
   } else if (std::holds_alternative<execution::sql::StringVal>(value_)) {
-    TERRIER_ASSERT(return_value_type_ == type::TypeId::VARCHAR || return_value_type_ == type::TypeId::VARBINARY,
-                   "Invalid TypeId for Val type.");
-    TERRIER_ASSERT(
+    NOISEPAGE_ASSERT(return_value_type_ == type::TypeId::VARCHAR || return_value_type_ == type::TypeId::VARBINARY,
+                     "Invalid TypeId for Val type.");
+    NOISEPAGE_ASSERT(
         GetStringVal().is_null_ ||
             (buffer_ == nullptr && GetStringVal().GetLength() <= execution::sql::StringVal::InlineThreshold()) ||
             (buffer_ != nullptr && GetStringVal().GetLength() > execution::sql::StringVal::InlineThreshold()),
@@ -67,12 +69,18 @@ T ConstantValueExpression::Peek() const {
   // NOLINTNEXTLINE: bugprone-suspicious-semicolon: seems like a false positive because of constexpr
   if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t> ||
                 std::is_same_v<T, int64_t>) {  // NOLINT: bugprone-suspicious-semicolon: seems like a false positive
-                                               // because of constexpr
+    // because of constexpr
     return static_cast<T>(GetInteger().val_);
   }
   // NOLINTNEXTLINE: bugprone-suspicious-semicolon: seems like a false positive because of constexpr
   if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
     return static_cast<T>(GetReal().val_);
+  }
+  // NOLINTNEXTLINE: bugprone-suspicious-semicolon: seems like a false positive because of constexpr
+  if constexpr (std::is_same_v<T, execution::sql::Decimal32> || std::is_same_v<T, execution::sql::Decimal64> ||
+                std::is_same_v<T, execution::sql::Decimal128>) {  // NOLINT: bugprone-suspicious-semicolon: seems like a
+                                                                  // false positive
+    return static_cast<T>(GetDecimalVal().val_);
   }
   // NOLINTNEXTLINE: bugprone-suspicious-semicolon: seems like a false positive because of constexpr
   if constexpr (std::is_same_v<T, execution::sql::Date>) {
@@ -85,6 +93,10 @@ T ConstantValueExpression::Peek() const {
   // NOLINTNEXTLINE: bugprone-suspicious-semicolon: seems like a false positive because of constexpr
   if constexpr (std::is_same_v<T, std::string_view>) {
     return std::get<execution::sql::StringVal>(value_).StringView();
+  }
+  // NOLINTNEXTLINE: bugprone-suspicious-semicolon: seems like a false positive because of constexpr
+  if constexpr (std::is_same_v<T, storage::VarlenEntry>) {
+    return GetStringVal().val_;
   }
   UNREACHABLE("Invalid type for Peek.");
 }
@@ -166,7 +178,7 @@ common::hash_t ConstantValueExpression::Hash() const {
     case type::TypeId::BIGINT: {
       return common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(Peek<int64_t>()));
     }
-    case type::TypeId::DECIMAL: {
+    case type::TypeId::REAL: {
       return common::HashUtil::CombineHashes(hash, common::HashUtil::Hash(Peek<double>()));
     }
     case type::TypeId::TIMESTAMP: {
@@ -202,7 +214,7 @@ bool ConstantValueExpression::operator==(const AbstractExpression &other) const 
     case type::TypeId::BIGINT: {
       return Peek<int64_t>() == other_cve.Peek<int64_t>();
     }
-    case type::TypeId::DECIMAL: {
+    case type::TypeId::REAL: {
       return Peek<double>() == other_cve.Peek<double>();
     }
     case type::TypeId::TIMESTAMP: {
@@ -231,7 +243,7 @@ std::string ConstantValueExpression::ToString() const {
     case type::TypeId::BIGINT: {
       return fmt::format("{}", GetInteger().val_);
     }
-    case type::TypeId::DECIMAL: {
+    case type::TypeId::REAL: {
       return fmt::format("{}", GetReal().val_);
     }
     case type::TypeId::TIMESTAMP: {
@@ -243,6 +255,37 @@ std::string ConstantValueExpression::ToString() const {
     case type::TypeId::VARCHAR:
     case type::TypeId::VARBINARY: {
       return fmt::format("{}", GetStringVal().val_.StringView());
+    }
+    default:
+      UNREACHABLE("Invalid TypeId.");
+  }
+}
+
+ConstantValueExpression ConstantValueExpression::FromString(const std::string &val, type::TypeId type_id) {
+  if (val.empty()) return ConstantValueExpression(type_id);
+  switch (type_id) {
+    case type::TypeId::BOOLEAN: {
+      return ConstantValueExpression(type_id, execution::sql::BoolVal(std::stoi(val) != 0));
+    }
+    case type::TypeId::TINYINT:
+    case type::TypeId::SMALLINT:
+    case type::TypeId::INTEGER:
+    case type::TypeId::BIGINT: {
+      return ConstantValueExpression(type_id, execution::sql::Integer(std::stoll(val)));
+    }
+    case type::TypeId::REAL: {
+      return ConstantValueExpression(type_id, execution::sql::Real(std::stod(val)));
+    }
+    case type::TypeId::TIMESTAMP: {
+      return ConstantValueExpression(type_id, execution::sql::TimestampVal(execution::sql::Timestamp::FromString(val)));
+    }
+    case type::TypeId::DATE: {
+      return ConstantValueExpression(type_id, execution::sql::DateVal(execution::sql::Date::FromString(val)));
+    }
+    case type::TypeId::VARCHAR:
+    case type::TypeId::VARBINARY: {
+      auto string_val = execution::sql::ValueUtil::CreateStringVal(val);
+      return ConstantValueExpression(type_id, string_val.first, std::move(string_val.second));
     }
     default:
       UNREACHABLE("Invalid TypeId.");
@@ -265,7 +308,7 @@ nlohmann::json ConstantValueExpression::ToJson() const {
         j["value"] = Peek<int64_t>();
         break;
       }
-      case type::TypeId::DECIMAL: {
+      case type::TypeId::REAL: {
         j["value"] = Peek<double>();
         break;
       }
@@ -309,7 +352,7 @@ std::vector<std::unique_ptr<AbstractExpression>> ConstantValueExpression::FromJs
         value_ = execution::sql::Integer(j.at("value").get<int64_t>());
         break;
       }
-      case type::TypeId::DECIMAL: {
+      case type::TypeId::REAL: {
         value_ = execution::sql::Real(j.at("value").get<double>());
         break;
       }
@@ -342,6 +385,10 @@ std::vector<std::unique_ptr<AbstractExpression>> ConstantValueExpression::FromJs
   return exprs;
 }
 
+void ConstantValueExpression::Accept(common::ManagedPointer<binder::SqlNodeVisitor> v) {
+  v->Visit(common::ManagedPointer(this));
+}
+
 DEFINE_JSON_BODY_DECLARATIONS(ConstantValueExpression);
 
 template ConstantValueExpression::ConstantValueExpression(const type::TypeId type, const execution::sql::Val value);
@@ -372,8 +419,12 @@ template int32_t ConstantValueExpression::Peek() const;
 template int64_t ConstantValueExpression::Peek() const;
 template float ConstantValueExpression::Peek() const;
 template double ConstantValueExpression::Peek() const;
+template execution::sql::Decimal32 ConstantValueExpression::Peek() const;
+template execution::sql::Decimal64 ConstantValueExpression::Peek() const;
+template execution::sql::Decimal128 ConstantValueExpression::Peek() const;
 template execution::sql::Date ConstantValueExpression::Peek() const;
 template execution::sql::Timestamp ConstantValueExpression::Peek() const;
 template std::string_view ConstantValueExpression::Peek() const;
+template storage::VarlenEntry ConstantValueExpression::Peek() const;
 
-}  // namespace terrier::parser
+}  // namespace noisepage::parser

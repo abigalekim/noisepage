@@ -12,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include "brain/operating_unit.h"
 #include "common/math_util.h"
 #include "execution/ast/ast_node_factory.h"
 #include "execution/ast/builtins.h"
@@ -27,10 +26,11 @@
 #include "execution/sql/table_vector_iterator.h"
 #include "execution/sql/thread_state_container.h"
 #include "execution/sql/value.h"
+#include "self_driving/modeling/operating_unit.h"
 // #include "execution/util/csv_reader.h" Fix later.
 #include "execution/util/execution_common.h"
 
-namespace terrier::execution::ast {
+namespace noisepage::execution::ast {
 
 // ---------------------------------------------------------
 // Key type used in the cache for struct types in the context
@@ -361,7 +361,7 @@ StructType *StructType::Get(Context *ctx, util::RegionVector<Field> &&fields) {
 
 // static
 StructType *StructType::Get(util::RegionVector<Field> &&fields) {
-  TERRIER_ASSERT(!fields.empty(), "Cannot use StructType::Get(fields) with an empty list of fields");
+  NOISEPAGE_ASSERT(!fields.empty(), "Cannot use StructType::Get(fields) with an empty list of fields");
   return StructType::Get(fields[0].type_->GetContext(), std::move(fields));
 }
 
@@ -389,4 +389,4 @@ FunctionType *FunctionType::Get(util::RegionVector<Field> &&params, Type *ret) {
   return func_type;
 }
 
-}  // namespace terrier::execution::ast
+}  // namespace noisepage::execution::ast

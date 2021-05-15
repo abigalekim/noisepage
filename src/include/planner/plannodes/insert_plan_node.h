@@ -13,7 +13,7 @@
 #include "planner/plannodes/abstract_scan_plan_node.h"
 #include "planner/plannodes/plan_visitor.h"
 
-namespace terrier::planner {
+namespace noisepage::planner {
 
 /**
  * Plan node for insert
@@ -80,17 +80,19 @@ class InsertPlanNode : public AbstractPlanNode {
     }
 
     /**
+     * @param insert_type type of insert
+     * @return builder object
+     */
+    Builder &SetInsertType(parser::InsertType insert_type) {
+      insert_type_ = insert_type;
+      return *this;
+    }
+
+    /**
      * Build the delete plan node
      * @return plan node
      */
-    std::unique_ptr<InsertPlanNode> Build() {
-      TERRIER_ASSERT(!children_.empty() || !values_.empty(), "Can't have an empty insert plan");
-      TERRIER_ASSERT(!children_.empty() || values_[0].size() == parameter_info_.size(),
-                     "Must have parameter info for each value");
-      return std::unique_ptr<InsertPlanNode>(new InsertPlanNode(std::move(children_), std::move(output_schema_),
-                                                                database_oid_, table_oid_, std::move(values_),
-                                                                std::move(parameter_info_)));
-    }
+    std::unique_ptr<InsertPlanNode> Build();
 
    protected:
     /**
@@ -120,6 +122,9 @@ class InsertPlanNode : public AbstractPlanNode {
      * vector of indexes used by this node
      */
     std::vector<catalog::index_oid_t> index_oids_;
+
+    /** Type of insert */
+    parser::InsertType insert_type_;
   };
 
  private:
@@ -131,16 +136,15 @@ class InsertPlanNode : public AbstractPlanNode {
    * @param table_oid the OID of the target SQL table
    * @param values values to insert
    * @param parameter_info parameters information
+   * @param index_oids indexes to insert into
+   * @param plan_node_id Plan node id
+   * @param insert_type type of insert
    */
   InsertPlanNode(std::vector<std::unique_ptr<AbstractPlanNode>> &&children, std::unique_ptr<OutputSchema> output_schema,
                  catalog::db_oid_t database_oid, catalog::table_oid_t table_oid,
                  std::vector<std::vector<common::ManagedPointer<parser::AbstractExpression>>> &&values,
-                 std::vector<catalog::col_oid_t> &&parameter_info)
-      : AbstractPlanNode(std::move(children), std::move(output_schema)),
-        database_oid_(database_oid),
-        table_oid_(table_oid),
-        values_(std::move(values)),
-        parameter_info_(std::move(parameter_info)) {}
+                 std::vector<catalog::col_oid_t> &&parameter_info, std::vector<catalog::index_oid_t> &&index_oids,
+                 plan_node_id_t plan_node_id, parser::InsertType insert_type);
 
  public:
   DISALLOW_COPY_AND_MOVE(InsertPlanNode)
@@ -189,9 +193,12 @@ class InsertPlanNode : public AbstractPlanNode {
   size_t GetBulkInsertCount() const { return values_.size(); }
 
   /**
-   * @return the index_oids used
+   * @return the indexes to insert into
    */
   const std::vector<catalog::index_oid_t> &GetIndexOids() const { return index_oids_; }
+
+  /** @return the insert type of plan */
+  parser::InsertType GetInsertType() const { return insert_type_; }
 
   /**
    * @return the hashed value of this plan node
@@ -231,11 +238,14 @@ class InsertPlanNode : public AbstractPlanNode {
   std::vector<catalog::col_oid_t> parameter_info_;
 
   /**
-   * vector of indexes used by this node
+   * Vector of indexes to insert into
    */
   std::vector<catalog::index_oid_t> index_oids_;
+
+  /** Type of insert */
+  parser::InsertType insert_type_;
 };
 
 DEFINE_JSON_HEADER_DECLARATIONS(InsertPlanNode);
 
-}  // namespace terrier::planner
+}  // namespace noisepage::planner

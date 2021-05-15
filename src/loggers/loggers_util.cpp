@@ -8,18 +8,25 @@
 #include "loggers/common_logger.h"
 #include "loggers/execution_logger.h"
 #include "loggers/index_logger.h"
+#include "loggers/messenger_logger.h"
 #include "loggers/metrics_logger.h"
+#include "loggers/model_server_logger.h"
 #include "loggers/network_logger.h"
 #include "loggers/optimizer_logger.h"
 #include "loggers/parser_logger.h"
+#include "loggers/replication_logger.h"
+#include "loggers/selfdriving_logger.h"
 #include "loggers/settings_logger.h"
 #include "loggers/storage_logger.h"
 #include "loggers/transaction_logger.h"
 
-std::shared_ptr<spdlog::sinks::stdout_sink_mt> default_sink = nullptr;  // NOLINT
+#ifdef NOISEPAGE_USE_LOGGING
+noisepage::common::SanctionedSharedPtr<spdlog::sinks::stdout_sink_mt>::Ptr default_sink = nullptr;
+#endif
 
-namespace terrier {
+namespace noisepage {
 void LoggersUtil::Initialize() {
+#ifdef NOISEPAGE_USE_LOGGING
   try {
     // create the default, shared sink
     if (default_sink == nullptr) {
@@ -30,10 +37,14 @@ void LoggersUtil::Initialize() {
     catalog::InitCatalogLogger();
     common::InitCommonLogger();
     execution::InitExecutionLogger();
+    messenger::InitMessengerLogger();
     metrics::InitMetricsLogger();
     network::InitNetworkLogger();
+    modelserver::InitModelServerLogger();
     optimizer::InitOptimizerLogger();
     parser::InitParserLogger();
+    replication::InitReplicationLogger();
+    selfdriving::InitSelfDrivingLogger();
     settings::InitSettingsLogger();
     storage::InitIndexLogger();
     storage::InitStorageLogger();
@@ -46,12 +57,15 @@ void LoggersUtil::Initialize() {
     std::cerr << "Debug logging initialization failed for " << ex.what() << std::endl;  // NOLINT
     throw ex;
   }
+#endif
 }
 
 void LoggersUtil::ShutDown() {
+#ifdef NOISEPAGE_USE_LOGGING
   if (default_sink != nullptr) {
     spdlog::shutdown();
     default_sink = nullptr;
   }
+#endif
 }
-}  // namespace terrier
+}  // namespace noisepage

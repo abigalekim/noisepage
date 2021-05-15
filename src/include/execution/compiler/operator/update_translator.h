@@ -7,15 +7,15 @@
 #include "execution/compiler/pipeline_driver.h"
 #include "storage/storage_defs.h"
 
-namespace terrier::catalog {
+namespace noisepage::catalog {
 class Schema;
-}  // namespace terrier::catalog
+}  // namespace noisepage::catalog
 
-namespace terrier::planner {
+namespace noisepage::planner {
 class UpdatePlanNode;
-}  // namespace terrier::planner
+}  // namespace noisepage::planner
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 /**
  * Update Translator
@@ -38,16 +38,11 @@ class UpdateTranslator : public OperatorTranslator, public PipelineDriver {
   void DefineHelperFunctions(util::RegionVector<ast::FunctionDecl *> *decls) override {}
 
   /**
-   * Initialize the counters.
-   */
-  void InitializeQueryState(FunctionBuilder *function) const override;
-
-  /**
-   * Does nothing.
+   * Initialize the storage interface and counters.
    * @param pipeline The current pipeline.
    * @param function The pipeline generating function.
    */
-  void InitializePipelineState(const Pipeline &pipeline, FunctionBuilder *function) const override {}
+  void InitializePipelineState(const Pipeline &pipeline, FunctionBuilder *function) const override;
 
   /**
    * Implement update logic where it fills in the update PR obtained from the StorageInterface struct
@@ -57,6 +52,9 @@ class UpdateTranslator : public OperatorTranslator, public PipelineDriver {
    * @param function The pipeline generating function.
    */
   void PerformPipelineWork(WorkContext *context, FunctionBuilder *function) const override;
+
+  /** Tear down the storage interface. */
+  void TearDownPipelineState(const Pipeline &pipeline, FunctionBuilder *function) const override;
 
   /** Record the counters for Lin's models. */
   void FinishPipelineWork(const Pipeline &pipeline, FunctionBuilder *function) const override;
@@ -117,8 +115,8 @@ class UpdateTranslator : public OperatorTranslator, public PipelineDriver {
   static std::vector<catalog::col_oid_t> CollectOids(const catalog::Schema &schema);
 
  private:
-  // Storage interface struct that we are updating with.
-  ast::Identifier updater_;
+  // Storage interface for updates.
+  StateDescriptor::Entry si_updater_;
 
   // Projected row that we use to update.
   ast::Identifier update_pr_;
@@ -140,4 +138,4 @@ class UpdateTranslator : public OperatorTranslator, public PipelineDriver {
   StateDescriptor::Entry num_updates_;
 };
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

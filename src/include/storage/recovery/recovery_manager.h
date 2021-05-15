@@ -21,15 +21,19 @@
 #include "storage/recovery/abstract_log_provider.h"
 #include "storage/sql_table.h"
 
-namespace terrier {
+namespace noisepage {
 class RecoveryBenchmark;
-}  // namespace terrier
+}  // namespace noisepage
 
-namespace terrier::transaction {
+namespace noisepage::replication {
+class ReplicationManager;
+}  // namespace noisepage::replication
+
+namespace noisepage::transaction {
 class TransactionManager;
-}  // namespace terrier::transaction
+}  // namespace noisepage::transaction
 
-namespace terrier::storage {
+namespace noisepage::storage {
 
 /**
  * Recovery Manager
@@ -49,13 +53,22 @@ class RecoveryManager : public common::DedicatedThreadOwner {
     /**
      * Runs the recovery task. Our task only calls Recover on the log manager.
      */
-    void RunTask() override { recovery_manager_->Recover(); }
+    void RunTask() override {
+      // If RunTask is invoked at all, we want to perform recovery at least once, necessitating a do-while loop.
+      // In particular, the following ordering of calls is disastrous with a normal while loop:
+      //    RunTask() (nothing happens yet) -> Terminate() (sets flag to stop looping) -> no recovery happens
+      // However, that ordering of calls is exactly what could happen by the simple invocation of:
+      //    RecoveryManager::StartRecovery() -> RecoveryManager::WaitForRecoveryToFinish()
+      do {
+        recovery_manager_->Recover();
+      } while (recovery_manager_->recovery_task_loop_again_);
+    }
 
     /**
-     * Terminate does nothing, the task will terminate when RunTask() returns. In the future if we need to support
-     * interrupting recovery, this can be handled here.
+     * Terminate stops the recovery task loop from looping again.
+     * This allows the current iteration of recovery to complete.
      */
-    void Terminate() override {}
+    void Terminate() override { recovery_manager_->recovery_task_loop_again_ = false; }
 
    private:
     RecoveryManager *recovery_manager_;
@@ -67,6 +80,7 @@ class RecoveryManager : public common::DedicatedThreadOwner {
    * @param catalog system catalog to interface with sql tables
    * @param txn_manager txn manager to use for re-executing recovered transactions
    * @param deferred_action_manager manager to use for deferred deletes
+   * @param replication_manager replication manager to acknowledge applied changes
    * @param thread_registry thread registry to register tasks
    * @param store block store used for SQLTable creation during recovery
    */
@@ -74,40 +88,47 @@ class RecoveryManager : public common::DedicatedThreadOwner {
                            const common::ManagedPointer<catalog::Catalog> catalog,
                            const common::ManagedPointer<transaction::TransactionManager> txn_manager,
                            const common::ManagedPointer<transaction::DeferredActionManager> deferred_action_manager,
-                           const common::ManagedPointer<terrier::common::DedicatedThreadRegistry> thread_registry,
+                           const common::ManagedPointer<replication::ReplicationManager> replication_manager,
+                           const common::ManagedPointer<noisepage::common::DedicatedThreadRegistry> thread_registry,
                            const common::ManagedPointer<BlockStore> store)
       : DedicatedThreadOwner(thread_registry),
         log_provider_(log_provider),
         catalog_(catalog),
         txn_manager_(txn_manager),
         deferred_action_manager_(deferred_action_manager),
-        block_store_(store),
-        recovered_txns_(0) {
+        replication_manager_(replication_manager),
+        block_store_(store) {
     // Initialize catalog_table_schemas_ map
-    catalog_table_schemas_[catalog::postgres::CLASS_TABLE_OID] = catalog::postgres::Builder::GetClassTableSchema();
-    catalog_table_schemas_[catalog::postgres::NAMESPACE_TABLE_OID] =
+    catalog_table_schemas_[catalog::postgres::PgClass::CLASS_TABLE_OID] =
+        catalog::postgres::Builder::GetClassTableSchema();
+    catalog_table_schemas_[catalog::postgres::PgNamespace::NAMESPACE_TABLE_OID] =
         catalog::postgres::Builder::GetNamespaceTableSchema();
-    catalog_table_schemas_[catalog::postgres::COLUMN_TABLE_OID] = catalog::postgres::Builder::GetColumnTableSchema();
-    catalog_table_schemas_[catalog::postgres::CONSTRAINT_TABLE_OID] =
+    catalog_table_schemas_[catalog::postgres::PgAttribute::COLUMN_TABLE_OID] =
+        catalog::postgres::Builder::GetColumnTableSchema();
+    catalog_table_schemas_[catalog::postgres::PgConstraint::CONSTRAINT_TABLE_OID] =
         catalog::postgres::Builder::GetConstraintTableSchema();
-    catalog_table_schemas_[catalog::postgres::INDEX_TABLE_OID] = catalog::postgres::Builder::GetIndexTableSchema();
-    catalog_table_schemas_[catalog::postgres::TYPE_TABLE_OID] = catalog::postgres::Builder::GetTypeTableSchema();
+    catalog_table_schemas_[catalog::postgres::PgIndex::INDEX_TABLE_OID] =
+        catalog::postgres::Builder::GetIndexTableSchema();
+    catalog_table_schemas_[catalog::postgres::PgType::TYPE_TABLE_OID] =
+        catalog::postgres::Builder::GetTypeTableSchema();
   }
 
-  /**
-   * Starts a background recovery task. Recovery will fully recover until the log provider stops providing logs.
-   */
+  /** Starts a background recovery thread, which does not stop until WaitForRecoveryToFinish() is called. */
   void StartRecovery();
 
-  /**
-   * Blocks until recovery finishes, if it has not already, and stops background thread.
-   */
+  /** Blocks until the current recovery finishes (runs out of logs), then stops the background thread. */
   void WaitForRecoveryToFinish();
+
+  /** @return True if the recovery task is still running. */
+  bool IsRecoveryTaskRunning() const { return recovery_task_ != nullptr; }
+
+  /** @return The ID of the last transaction that was applied. */
+  transaction::timestamp_t GetLastAppliedTransactionId() const { return last_applied_txn_id_; }
 
  private:
   FRIEND_TEST(RecoveryTests, DoubleRecoveryTest);
   friend class RecoveryTests;
-  friend class terrier::RecoveryBenchmark;
+  friend class noisepage::RecoveryBenchmark;
 
   // Log provider for reading in logs
   const common::ManagedPointer<AbstractLogProvider> log_provider_;
@@ -120,6 +141,9 @@ class RecoveryManager : public common::DedicatedThreadOwner {
 
   // DeferredActions manager to defer record deletes
   const common::ManagedPointer<transaction::DeferredActionManager> deferred_action_manager_;
+
+  // Replication manager to acknowledge when commits are finished.
+  const common::ManagedPointer<replication::ReplicationManager> replication_manager_;
 
   // TODO(Gus): The recovery manager should be passed a specific block store for table construction. Block store
   // management/assignment is probably a larger system issue that needs to be adddressed. Block store, used to create
@@ -144,25 +168,35 @@ class RecoveryManager : public common::DedicatedThreadOwner {
 
   // Background recovery task
   common::ManagedPointer<RecoveryTask> recovery_task_ = nullptr;
+  /**
+   * The RecoveryManager is used for applying records to replicas in replication.
+   * This is a change from the initial RecoveryManager design where recovery happens in one shot on startup.
+   * Currently, this is achieved by "just" looping the recovery task at the end of recovery based on this variable.
+   * Unfortunately, this is slightly error-prone in practice -- tread with caution here.
+   * One consequence is that non-replication uses of the RecoveryManager must manually call WaitForRecoveryToFinish()
+   * for the recovery task to end, but this seems natural enough.
+   */
+  bool recovery_task_loop_again_ = false;
 
   // Its possible during recovery that the schemas for catalog tables may not yet exist in pg_class. Thus, we hardcode
   // them here
   std::unordered_map<catalog::table_oid_t, catalog::Schema> catalog_table_schemas_;
 
-  // Number of recovered committed txns. Used for benchmarking
-  uint32_t recovered_txns_;
+  transaction::timestamp_t last_applied_txn_id_ = transaction::INITIAL_TXN_TIMESTAMP;  ///< The last applied txn's ID.
+  uint32_t recovered_txns_ = 0;  ///< The number of recovered committed txns.
 
   /**
    * Recovers the databases using the provided log provider
-   * @return number of committed transactions replayed
    */
-  void Recover() { RecoverFromLogs(); }
+  void Recover() {
+    if (log_provider_ != nullptr) RecoverFromLogs(log_provider_);
+  }
 
   /**
    * Recovers the databases from the logs.
    * @note this is a separate method so in the future, we can also have a RecoverFromCheckpoint method
    */
-  void RecoverFromLogs();
+  void RecoverFromLogs(common::ManagedPointer<AbstractLogProvider> log_provider_);
 
   /**
    * @brief Replay a committed transaction corresponding to txn_id.
@@ -191,7 +225,7 @@ class RecoveryManager : public common::DedicatedThreadOwner {
    * @return new tuple slot
    */
   TupleSlot GetTupleSlotMapping(TupleSlot slot) {
-    TERRIER_ASSERT(tuple_slot_map_.find(slot) != tuple_slot_map_.end(), "No tuple slot mapping exists");
+    NOISEPAGE_ASSERT(tuple_slot_map_.find(slot) != tuple_slot_map_.end(), "No tuple slot mapping exists");
     return tuple_slot_map_[slot];
   }
 
@@ -204,9 +238,9 @@ class RecoveryManager : public common::DedicatedThreadOwner {
   common::ManagedPointer<catalog::DatabaseCatalog> GetDatabaseCatalog(transaction::TransactionContext *txn,
                                                                       catalog::db_oid_t db_oid) {
     auto db_catalog_ptr = catalog_->GetDatabaseCatalog(common::ManagedPointer(txn), db_oid);
-    TERRIER_ASSERT(db_catalog_ptr != nullptr, "No catalog for given database oid");
+    NOISEPAGE_ASSERT(db_catalog_ptr != nullptr, "No catalog for given database oid");
     auto result UNUSED_ATTRIBUTE = db_catalog_ptr->TryLock(common::ManagedPointer(txn));
-    TERRIER_ASSERT(result, "There should not be concurrent DDL changes during recovery.");
+    NOISEPAGE_ASSERT(result, "There should not be concurrent DDL changes during recovery.");
     return db_catalog_ptr;
   }
 
@@ -250,28 +284,28 @@ class RecoveryManager : public common::DedicatedThreadOwner {
    * @return true if log record is a special case catalog record, false otherwise
    */
   bool IsSpecialCaseCatalogRecord(const LogRecord *record) {
-    TERRIER_ASSERT(record->RecordType() == LogRecordType::REDO || record->RecordType() == LogRecordType::DELETE,
-                   "Special case catalog records must only be delete or redo records");
+    NOISEPAGE_ASSERT(record->RecordType() == LogRecordType::REDO || record->RecordType() == LogRecordType::DELETE,
+                     "Special case catalog records must only be delete or redo records");
 
     if (record->RecordType() == LogRecordType::REDO) {
       auto *redo_record = record->GetUnderlyingRecordBodyAs<RedoRecord>();
       if (IsInsertRecord(redo_record)) {
         // Case 1
-        return redo_record->GetTableOid() == catalog::postgres::DATABASE_TABLE_OID ||
-               redo_record->GetTableOid() == catalog::postgres::PRO_TABLE_OID;
+        return redo_record->GetTableOid() == catalog::postgres::PgDatabase::DATABASE_TABLE_OID ||
+               redo_record->GetTableOid() == catalog::postgres::PgProc::PRO_TABLE_OID;
       }
 
       // Case 2
-      return redo_record->GetTableOid() == catalog::postgres::CLASS_TABLE_OID ||
-             redo_record->GetTableOid() == catalog::postgres::PRO_TABLE_OID;
+      return redo_record->GetTableOid() == catalog::postgres::PgClass::CLASS_TABLE_OID ||
+             redo_record->GetTableOid() == catalog::postgres::PgProc::PRO_TABLE_OID;
     }
 
     // Case 3, 4, 5, and 6
     auto *delete_record = record->GetUnderlyingRecordBodyAs<DeleteRecord>();
-    return delete_record->GetTableOid() == catalog::postgres::DATABASE_TABLE_OID ||
-           delete_record->GetTableOid() == catalog::postgres::CLASS_TABLE_OID ||
-           delete_record->GetTableOid() == catalog::postgres::INDEX_TABLE_OID ||
-           delete_record->GetTableOid() == catalog::postgres::COLUMN_TABLE_OID;
+    return delete_record->GetTableOid() == catalog::postgres::PgDatabase::DATABASE_TABLE_OID ||
+           delete_record->GetTableOid() == catalog::postgres::PgClass::CLASS_TABLE_OID ||
+           delete_record->GetTableOid() == catalog::postgres::PgIndex::INDEX_TABLE_OID ||
+           delete_record->GetTableOid() == catalog::postgres::PgAttribute::COLUMN_TABLE_OID;
   }
 
   /**
@@ -326,8 +360,8 @@ class RecoveryManager : public common::DedicatedThreadOwner {
    * @return number of EXTRA log records processed
    */
   uint32_t ProcessSpecialCasePGProcRecord(
-      terrier::transaction::TransactionContext *txn,
-      std::vector<std::pair<terrier::storage::LogRecord *, std::vector<terrier::byte *>>> *buffered_changes,
+      noisepage::transaction::TransactionContext *txn,
+      std::vector<std::pair<noisepage::storage::LogRecord *, std::vector<noisepage::byte *>>> *buffered_changes,
       uint32_t start_idx);
 
   /**
@@ -352,15 +386,16 @@ class RecoveryManager : public common::DedicatedThreadOwner {
    */
   // TODO(John): Currently this is being used to extract values from redo records for catalog tables. You should look at
   // adding constants for col_id_t for catalog tables.
-  std::vector<catalog::col_oid_t> GetOidsForRedoRecord(storage::SqlTable *sql_table, RedoRecord *record);
+  std::vector<catalog::col_oid_t> GetOidsForRedoRecord(common::ManagedPointer<storage::SqlTable> sql_table,
+                                                       RedoRecord *record);
 
   /**
    * @param oid oid of catalog index
    * @param db_catalog database catalog that has given index
    * @return pointer to catalog index
    */
-  storage::index::Index *GetCatalogIndex(catalog::index_oid_t oid,
-                                         const common::ManagedPointer<catalog::DatabaseCatalog> &db_catalog);
+  common::ManagedPointer<storage::index::Index> GetCatalogIndex(
+      catalog::index_oid_t oid, const common::ManagedPointer<catalog::DatabaseCatalog> &db_catalog);
 
   /**
    * Fetches a table's schema. If the table is a catalog table, we return the cached schema, otherwise we go to the
@@ -374,4 +409,4 @@ class RecoveryManager : public common::DedicatedThreadOwner {
                                         const common::ManagedPointer<catalog::DatabaseCatalog> &db_catalog,
                                         catalog::table_oid_t table_oid) const;
 };
-}  // namespace terrier::storage
+}  // namespace noisepage::storage

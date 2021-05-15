@@ -10,7 +10,7 @@
 #include "execution/sql_test.h"
 #include "gmock/gmock.h"
 
-namespace terrier::execution::sql::test {
+namespace noisepage::execution::sql::test {
 
 class FilterManagerTest : public SqlBasedTest {};
 
@@ -145,14 +145,14 @@ TEST_F(FilterManagerTest, AdaptiveCheckTest) {
   filter.InsertClauseTerms(
       {[](auto exec_ctx, auto vp, auto tids, auto ctx) {
          auto *r = reinterpret_cast<uint32_t *>(ctx);
-         if (*r < 1000) std::this_thread::sleep_for(250us);  // Fake a sleep.
+         if (*r < 1000) std::this_thread::sleep_for(500us);  // Fake a sleep.
          const auto val = GenericValue::CreateInteger(500);
          VectorFilterExecutor::SelectLessThanVal(
              reinterpret_cast<exec::ExecutionContext *>(exec_ctx)->GetExecutionSettings(), vp, Col::A, val, tids);
        },
        [](auto exec_ctx, auto vp, auto tids, auto ctx) {
          auto *r = reinterpret_cast<uint32_t *>(ctx);
-         if (*r >= 1000) std::this_thread::sleep_for(250us);  // Fake a sleep.
+         if (*r >= 1000) std::this_thread::sleep_for(500us);  // Fake a sleep.
          const auto val = GenericValue::CreateInteger(7);
          VectorFilterExecutor::SelectLessThanVal(
              reinterpret_cast<exec::ExecutionContext *>(exec_ctx)->GetExecutionSettings(), vp, Col::B, val, tids);
@@ -189,4 +189,4 @@ TEST_F(FilterManagerTest, AdaptiveCheckTest) {
   }
 }
 
-}  // namespace terrier::execution::sql::test
+}  // namespace noisepage::execution::sql::test

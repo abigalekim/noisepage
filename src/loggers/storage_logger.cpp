@@ -1,10 +1,8 @@
 #include "loggers/storage_logger.h"
 
-#include <memory>
-
-namespace terrier::storage {
-
-std::shared_ptr<spdlog::logger> storage_logger = nullptr;  // NOLINT
+namespace noisepage::storage {
+#ifdef NOISEPAGE_USE_LOGGING
+common::SanctionedSharedPtr<spdlog::logger>::Ptr storage_logger = nullptr;
 
 void InitStorageLogger() {
   if (storage_logger == nullptr) {
@@ -12,5 +10,5 @@ void InitStorageLogger() {
     spdlog::register_logger(storage_logger);
   }
 }
-
-}  // namespace terrier::storage
+#endif
+}  // namespace noisepage::storage

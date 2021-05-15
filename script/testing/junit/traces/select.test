@@ -153,7 +153,7 @@ DROP TABLE temp3
 
 # LIKE AND NOT LIKE
 statement ok
-CREATE TABLE like_tbl (int_val INT, double_val DECIMAL,str_i_val VARCHAR(32),str_a_val VARCHAR(32));
+CREATE TABLE like_tbl (int_val INT, double_val DOUBLE,str_i_val VARCHAR(32),str_a_val VARCHAR(32));
 
 statement ok
 INSERT INTO like_tbl (int_val, double_val, str_i_val, str_a_val) VALUES (1, 2.0, '123456', 'AbCdEf');
@@ -804,3 +804,523 @@ DROP TABLE tab3;
 
 statement ok
 DROP TABLE tab4;
+
+# #1020 SELECT * TODO(WAN): no good way of testing exceptions being thrown right now
+
+# #1191 SELECT NULL
+query T
+SELECT NULL;
+----
+1 values hashing to 68b329da9893e34099c7d8ad5cb9c940
+
+# Fix #780
+statement ok
+CREATE TABLE t (a INT, aa INT);
+
+statement ok
+CREATE TABLE tt (b INT, bb INT);
+
+statement ok
+INSERT INTO t VALUES (1,1), (2,2), (3,3), (4,4), (5,5);
+
+statement ok
+INSERT INTO tt VALUES (10,10), (20,20), (30,30), (40,40), (50,50);
+
+query II nosort
+SELECT * FROM t;
+----
+1
+1
+2
+2
+3
+3
+4
+4
+5
+5
+
+query II nosort
+SELECT * FROM tt;
+----
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+
+query IIII nosort
+SELECT *, * FROM t;
+----
+1
+1
+1
+1
+2
+2
+2
+2
+3
+3
+3
+3
+4
+4
+4
+4
+5
+5
+5
+5
+
+query IIII nosort
+SELECT *, * FROM tt;
+----
+10
+10
+10
+10
+20
+20
+20
+20
+30
+30
+30
+30
+40
+40
+40
+40
+50
+50
+50
+50
+
+query IIII nosort
+SELECT * FROM t, tt;
+----
+100 values hashing to fd753217f4567732025d25d3a856ea0b
+
+query IIIIIIII nosort
+SELECT *, * FROM t, tt;
+----
+200 values hashing to f63c5b706ef9235039ca4a62161936e9
+
+query II nosort
+SELECT t.* FROM t;
+----
+1
+1
+2
+2
+3
+3
+4
+4
+5
+5
+
+query II nosort
+SELECT tt.* FROM tt;
+----
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+
+query IIII nosort
+SELECT t.*, tt.* FROM t, tt;
+----
+100 values hashing to fd753217f4567732025d25d3a856ea0b
+
+query IIII nosort
+SELECT ta.*, tt.* FROM t ta, tt;
+----
+100 values hashing to fd753217f4567732025d25d3a856ea0b
+
+query IIII nosort
+SELECT t.*, tb.* FROM t, tt tb;
+----
+100 values hashing to fd753217f4567732025d25d3a856ea0b
+
+query IIII nosort
+SELECT ta.*, tb.* FROM t ta, tt tb;
+----
+100 values hashing to fd753217f4567732025d25d3a856ea0b
+
+query II nosort
+SELECT t.* FROM t, tt;
+----
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+2
+2
+2
+2
+2
+2
+2
+2
+2
+2
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+5
+5
+5
+5
+5
+5
+5
+5
+5
+5
+
+query II nosort
+SELECT tt.* FROM t, tt;
+----
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+
+query II nosort
+SELECT ta.* FROM t ta, tt;
+----
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+2
+2
+2
+2
+2
+2
+2
+2
+2
+2
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+5
+5
+5
+5
+5
+5
+5
+5
+5
+5
+
+query II nosort
+SELECT tb.* FROM t, tt tb;
+----
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+10
+10
+20
+20
+30
+30
+40
+40
+50
+50
+
+query T
+SELECT true;
+----
+t
+
+query T
+SELECT '2020-11-07'::date;
+----
+2020-11-07
+
+statement ok
+CREATE TABLE foo (a date);
+
+statement ok
+INSERT INTO foo VALUES ('2020-11-07'::date);
+
+statement ok
+INSERT INTO foo VALUES ('2020-11-08'::date);
+
+query T rowsort
+select * from foo where a > '2020-11-07'::date;
+----
+2020-11-08
+
+query T rowsort
+SELECT * FROM foo WHERE a >= '2020-11-07'::date;
+----
+2020-11-07
+2020-11-08
+
+statement ok
+DROP TABLE foo;
+
+statement ok
+DROP TABLE IF EXISTS t;
+
+statement ok
+CREATE TABLE t (a INT PRIMARY KEY);
+
+statement ok
+INSERT INTO t VALUES (1);
+
+statement error
+INSERT INTO t VALUES (1);
+
+statement ok
+DROP TABLE t;
+
+statement ok
+DROP TABLE tt;
+
+statement ok
+CREATE TABLE t (a INT, b VARCHAR(32));
+
+statement ok
+INSERT INTO t VALUES (1, 'a'), (2, 'nananananabanana'), (3, 'catdogelephantfishgiraffehorse'), (4, 'd');
+
+query I rowsort
+SELECT a FROM t WHERE a IN (1);
+----
+1
+
+query I rowsort
+SELECT a FROM t WHERE a IN (2,3);
+----
+2
+3
+
+query I rowsort
+SELECT a FROM t WHERE a NOT IN (2,3);
+----
+1
+4
+
+query I rowsort
+SELECT a FROM t WHERE b IN ('a','nananananabanana');
+----
+1
+2
+
+query I rowsort
+SELECT a FROM t WHERE b IN ('nananananabanana','catdogelephantfishgiraffehorse');
+----
+2
+3
+
+query I rowsort
+SELECT a FROM t WHERE b NOT IN ('a');
+----
+2
+3
+4
+
+query I rowsort
+SELECT a FROM t WHERE b IN ('a','nananananabanana','catdogelephantfishgiraffehorse','d');
+----
+1
+2
+3
+4
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t (a INT);
+
+statement ok
+INSERT INTO t VALUES (1), (2), (3), (4);
+
+statement error
+SELECT a FROM t WHERE 5;
+----
+
+query I rowsort
+SELECT a FROM t WHERE 5=4;
+----
+
+query I rowsort
+SELECT a FROM t WHERE 5=5;
+----
+1
+2
+3
+4
+
+query I rowsort
+SELECT a FROM t WHERE 1 = NULL;
+----
+
+# query I rowsort
+# SELECT a FROM t WHERE NULL;
+# ----
+
+# query I rowsort
+# SELECT a FROM t WHERE true;
+# ----
+# 1
+# 2
+# 3
+# 4
+
+# query I rowsort
+# SELECT a FROM t WHERE false;
+# ----
+
+statement ok
+DROP TABLE t;

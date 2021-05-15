@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "brain/operating_unit.h"
 #include "execution/ast/ast_node_factory.h"
 #include "execution/ast/builtins.h"
 #include "execution/ast/identifier.h"
@@ -19,12 +18,13 @@
 #include "execution/sql/sql.h"
 #include "parser/expression_defs.h"
 #include "planner/plannodes/plan_node_defs.h"
+#include "self_driving/modeling/operating_unit.h"
 
-namespace terrier::catalog {
+namespace noisepage::catalog {
 class CatalogAccessor;
-}  // namespace terrier::catalog
+}  // namespace noisepage::catalog
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 /**
  * Bundles convenience methods needed by other classes during code generation.
@@ -129,6 +129,11 @@ class CodeGen {
   [[nodiscard]] ast::Expr *Const64(int64_t val) const;
 
   /**
+   * @return A literal whose value is the provided 32-bit unsigned integer.
+   */
+  [[nodiscard]] ast::Expr *ConstU32(uint32_t val) const;
+
+  /**
    * @return A literal whose value is the provided 64-bit floating point.
    */
   [[nodiscard]] ast::Expr *ConstDouble(double val) const;
@@ -174,6 +179,11 @@ class CodeGen {
    * @return The type representation for an 64-bit signed integer (i.e., int64)
    */
   [[nodiscard]] ast::Expr *Int64Type() const;
+
+  /**
+   * @return The type representation for an 32-bit unsigned integer (i.e., uint32)
+   */
+  [[nodiscard]] ast::Expr *Uint32Type() const;
 
   /**
    * @return The type representation for an 32-bit floating point number (i.e., float32)
@@ -229,9 +239,11 @@ class CodeGen {
    * Return the appropriate aggregate type for the given input aggregation expression.
    * @param agg_type The aggregate expression type.
    * @param ret_type The return type of the aggregate.
+   * @param child_type The type of the child of the aggregate.
    * @return The corresponding TPL aggregate type.
    */
-  [[nodiscard]] ast::Expr *AggregateType(parser::ExpressionType agg_type, sql::TypeId ret_type) const;
+  [[nodiscard]] ast::Expr *AggregateType(parser::ExpressionType agg_type, sql::TypeId ret_type,
+                                         sql::TypeId child_type) const;
 
   /**
    * @return An expression that represents the address of the provided object.
@@ -609,6 +621,19 @@ class CodeGen {
                                              uint32_t table_oid, uint32_t index_oid, ast::Identifier col_oids);
 
   /**
+   * Call \@indexIteratorInit(iter_ptr, execCtx, table_oid, index_oid, col_oids)
+   * @param iter_ptr Pointer to the index iterator.
+   * @param exec_ctx_var The execution context variable.
+   * @param num_attrs Number of attributes
+   * @param table_oid The oid of the index's table.
+   * @param index_oid The oid the index.
+   * @param col_oids The identifier of the array of column oids to read.
+   * @return The expression corresponding to the builtin call.
+   */
+  [[nodiscard]] ast::Expr *IndexIteratorInit(ast::Expr *iter_ptr, ast::Expr *exec_ctx_var, uint32_t num_attrs,
+                                             uint32_t table_oid, uint32_t index_oid, ast::Identifier col_oids);
+
+  /**
    * Call \@indexIteratorScanType(&iter[, limit])
    * @param iter The identifier of the index iterator.
    * @param scan_type The type of scan to perform.
@@ -616,6 +641,15 @@ class CodeGen {
    * @return The expression corresponding to the builtin call.
    */
   [[nodiscard]] ast::Expr *IndexIteratorScan(ast::Identifier iter, planner::IndexScanType scan_type, uint32_t limit);
+
+  /**
+   * Call \@indexIteratorScanType(&iter_ptr[, limit])
+   * @param iter_ptr Pointer to the index iterator.
+   * @param scan_type The type of scan to perform.
+   * @param limit The limit of the scan in case of limited scans.
+   * @return The expression corresponding to the builtin call.
+   */
+  [[nodiscard]] ast::Expr *IndexIteratorScan(ast::Expr *iter_ptr, planner::IndexScanType scan_type, uint32_t limit);
 
   // -------------------------------------------------------
   //
@@ -697,7 +731,7 @@ class CodeGen {
    * @param attr_idx Index of the column being accessed.
    * @return The expression corresponding to the builtin call.
    */
-  [[nodiscard]] ast::Expr *PRGet(ast::Expr *pr, terrier::type::TypeId type, bool nullable, uint32_t attr_idx);
+  [[nodiscard]] ast::Expr *PRGet(ast::Expr *pr, noisepage::type::TypeId type, bool nullable, uint32_t attr_idx);
 
   /**
    * Call \@prSet(pr, attr_idx, val, [own]).
@@ -748,6 +782,30 @@ class CodeGen {
   [[nodiscard]] ast::Expr *FilterManagerRunFilters(ast::Expr *filter_manager, ast::Expr *vpi, ast::Expr *exec_ctx);
 
   /**
+   * Call \@execCtxRegisterHook(exec_ctx, hook_idx, hook).
+   * @param exec_ctx The execution context to modify.
+   * @param hook_idx Index to install hook at
+   * @param hook Hook function to register
+   * @return The call.
+   */
+  [[nodiscard]] ast::Expr *ExecCtxRegisterHook(ast::Expr *exec_ctx, uint32_t hook_idx, ast::Identifier hook);
+
+  /**
+   * Call \@execCtxClearHooks(exec_ctx).
+   * @param exec_ctx The execution context to modify.
+   * @return The call.
+   */
+  [[nodiscard]] ast::Expr *ExecCtxClearHooks(ast::Expr *exec_ctx);
+
+  /**
+   * Call \@execCtxInitHooks(exec_ctx, num_hooks).
+   * @param exec_ctx The execution context to modify.
+   * @param num_hooks Number of hooks
+   * @return The call.
+   */
+  [[nodiscard]] ast::Expr *ExecCtxInitHooks(ast::Expr *exec_ctx, uint32_t num_hooks);
+
+  /**
    * Call \@execCtxAddRowsAffected(exec_ctx, num_rows_affected).
    * @param exec_ctx The execution context to modify.
    * @param num_rows_affected The amount to increment or decrement the number of rows affected.
@@ -757,16 +815,18 @@ class CodeGen {
 
   /**
    * Call \@execCtxRecordFeature(exec_ctx, pipeline_id, feature_id, feature_attribute, value).
-   * @param exec_ctx The execution context to modify.
+   * @param ouvec OU feature vector to update
    * @param pipeline_id The ID of the pipeline whose feature is to be recorded.
    * @param feature_id The ID of the feature to be recorded.
    * @param feature_attribute The attribute of the feature to record.
+   * @param mode Update mode
    * @param value The value to be recorded.
    * @return The call.
    */
-  [[nodiscard]] ast::Expr *ExecCtxRecordFeature(ast::Expr *exec_ctx, pipeline_id_t pipeline_id, feature_id_t feature_id,
-                                                brain::ExecutionOperatingUnitFeatureAttribute feature_attribute,
-                                                ast::Expr *value);
+  [[nodiscard]] ast::Expr *ExecOUFeatureVectorRecordFeature(
+      ast::Expr *ouvec, pipeline_id_t pipeline_id, feature_id_t feature_id,
+      selfdriving::ExecutionOperatingUnitFeatureAttribute feature_attribute,
+      selfdriving::ExecutionOperatingUnitFeatureUpdateMode mode, ast::Expr *value);
 
   /**
    * Call \@execCtxGetMemPool(). Return the memory pool within an execution context.
@@ -845,11 +905,10 @@ class CodeGen {
    * the build-row structures with the provided name.
    * @param join_hash_table The join hash table.
    * @param exec_ctx The execution context.
-   * @param mem_pool The memory pool.
    * @param build_row_type_name The name of the materialized build-side row in the hash table.
    * @return The call.
    */
-  [[nodiscard]] ast::Expr *JoinHashTableInit(ast::Expr *join_hash_table, ast::Expr *exec_ctx, ast::Expr *mem_pool,
+  [[nodiscard]] ast::Expr *JoinHashTableInit(ast::Expr *join_hash_table, ast::Expr *exec_ctx,
                                              ast::Identifier build_row_type_name);
 
   /**
@@ -966,12 +1025,10 @@ class CodeGen {
    * Call \@aggHTInit(). Initializes an aggregation hash table.
    * @param agg_ht A pointer to the aggregation hash table.
    * @param exec_ctx The execution context.
-   * @param mem_pool A pointer to the memory pool.
    * @param agg_payload_type The name of the struct representing the aggregation payload.
    * @return The call.
    */
-  [[nodiscard]] ast::Expr *AggHashTableInit(ast::Expr *agg_ht, ast::Expr *exec_ctx, ast::Expr *mem_pool,
-                                            ast::Identifier agg_payload_type);
+  [[nodiscard]] ast::Expr *AggHashTableInit(ast::Expr *agg_ht, ast::Expr *exec_ctx, ast::Identifier agg_payload_type);
 
   /**
    * Call \@aggHTLookup(). Performs a single key lookup in an aggregation hash table. The hash value
@@ -1142,10 +1199,20 @@ class CodeGen {
 
   /**
    * Call \@aggResult(). Finalizes and returns the result of the aggregation.
+   * @param exec_ctx The execution context that we are running in.
+   * @param agg A pointer to the aggregator.
+   * @param expression_type Type of aggregate expression
+   * @return The call.
+   */
+  [[nodiscard]] ast::Expr *AggregatorResult(ast::Expr *exec_ctx, ast::Expr *agg,
+                                            const parser::ExpressionType &expression_type);
+
+  /**
+   * Call \@aggFree(). Frees all resources associated with the aggregator.
    * @param agg A pointer to the aggregator.
    * @return The call.
    */
-  [[nodiscard]] ast::Expr *AggregatorResult(ast::Expr *agg);
+  [[nodiscard]] ast::Expr *AggregatorFree(ast::Expr *agg);
 
   // -------------------------------------------------------
   //
@@ -1157,12 +1224,12 @@ class CodeGen {
    * Call \@sorterInit(). Initialize the provided sorter instance using a memory pool, comparison
    * function and the struct that will be materialized into the sorter instance.
    * @param sorter The sorter instance.
-   * @param mem_pool The memory pool instance.
+   * @param exec_ctx The execution context that we are running in.
    * @param cmp_func_name The name of the comparison function to use.
    * @param sort_row_type_name The name of the materialized sort-row type.
    * @return The call.
    */
-  [[nodiscard]] ast::Expr *SorterInit(ast::Expr *sorter, ast::Expr *mem_pool, ast::Identifier cmp_func_name,
+  [[nodiscard]] ast::Expr *SorterInit(ast::Expr *sorter, ast::Expr *exec_ctx, ast::Identifier cmp_func_name,
                                       ast::Identifier sort_row_type_name);
 
   /**
@@ -1328,16 +1395,16 @@ class CodeGen {
   [[nodiscard]] ast::Expr *CSVReaderClose(ast::Expr *reader);
 
   /**
-   * Call storageInterfaceInit(&storage_interface, execCtx, table_oid, col_oids, need_indexes)
-   * @param si The storage interface to initialize
+   * Call \@storageInterfaceInit(si_ptr, execCtx, table_oid, col_oids, need_indexes)
+   * @param storage_interface_ptr A pointer to the storage interface to initialize.
    * @param exec_ctx The execution context that we are running in.
    * @param table_oid The oid of the table being accessed.
    * @param col_oids The identifier of the array of column oids to access.
    * @param need_indexes Whether the storage interface will need to use indexes
    * @return The expression corresponding to the builtin call.
    */
-  ast::Expr *StorageInterfaceInit(ast::Identifier si, ast::Expr *exec_ctx, uint32_t table_oid, ast::Identifier col_oids,
-                                  bool need_indexes);
+  ast::Expr *StorageInterfaceInit(ast::Expr *storage_interface_ptr, ast::Expr *exec_ctx, uint32_t table_oid,
+                                  ast::Identifier col_oids, bool need_indexes);
 
   // ---------------------------------------------------------------------------
   //
@@ -1415,7 +1482,7 @@ class CodeGen {
   // ---------------------------------------------------------------------------
 
   /** @return PipelineOperatingUnits instance. */
-  common::ManagedPointer<brain::PipelineOperatingUnits> GetPipelineOperatingUnits() const {
+  common::ManagedPointer<selfdriving::PipelineOperatingUnits> GetPipelineOperatingUnits() const {
     return common::ManagedPointer(pipeline_operating_units_);
   }
 
@@ -1423,7 +1490,7 @@ class CodeGen {
   common::ManagedPointer<ast::Context> GetAstContext() const { return common::ManagedPointer(context_); }
 
   /** @return Release ownership of the PipelineOperatingUnits instance. */
-  std::unique_ptr<brain::PipelineOperatingUnits> ReleasePipelineOperatingUnits() {
+  std::unique_ptr<selfdriving::PipelineOperatingUnits> ReleasePipelineOperatingUnits() {
     return std::move(pipeline_operating_units_);
   }
 
@@ -1450,7 +1517,7 @@ class CodeGen {
   // The catalog accessor.
   catalog::CatalogAccessor *accessor_;
   // Minirunner-related.
-  std::unique_ptr<brain::PipelineOperatingUnits> pipeline_operating_units_;
+  std::unique_ptr<selfdriving::PipelineOperatingUnits> pipeline_operating_units_;
 };
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

@@ -2,13 +2,17 @@
 
 #include <sys/stat.h>
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
-namespace terrier::metrics {
+#include "common/macros.h"
+
+namespace noisepage::metrics {
 
 bool FileExists(const std::string &path) {
   struct stat buffer;
@@ -32,6 +36,15 @@ void OpenFiles(std::vector<std::ofstream> *outfiles) {
   }
 }
 
+MetricsManager::MetricsManager() {
+  // construct a bitset of all true (sampling rate 100) by default
+  std::vector<bool> samples_mask(100, true);
+  for (uint8_t i = 0; i < NUM_COMPONENTS; i++) {
+    samples_mask_[i] = samples_mask;
+    metrics_output_[i] = MetricsOutput::CSV;
+  }
+}
+
 void MetricsManager::Aggregate() {
   common::SpinLatch::ScopedSpinLatch guard(&latch_);
   for (const auto &metrics_store : stores_map_) {
@@ -43,9 +56,29 @@ void MetricsManager::Aggregate() {
           aggregated_metrics_[component] = std::move(raw_data[component]);
         else
           aggregated_metrics_[component]->Aggregate(raw_data[component].get());
+
+        NOISEPAGE_ASSERT(aggregated_metrics_[component], "Post-aggregation component should not be NULL");
       }
     }
   }
+}
+
+void MetricsManager::SetMetricSampleRate(const MetricsComponent component, const uint8_t sample_rate) {
+  NOISEPAGE_ASSERT(sample_rate >= 0 && sample_rate <= 100, "Invalid sampling rate.");
+  // create a bitset with the correct number of trues based on sample rate
+  std::vector<bool> samples_mask(100, false);
+  for (uint8_t i = 0; i < sample_rate; i++) {
+    samples_mask[i] = true;
+  }
+  // shuffle the bitset to distribute the samples
+  auto rd = std::random_device{};
+  auto rng = std::default_random_engine{rd()};
+  std::shuffle(samples_mask.begin(), samples_mask.end(), rng);
+  // replace the existing samples mask for this component in the global data structure
+  NOISEPAGE_ASSERT(std::count(samples_mask.begin(), samples_mask.end(), true) == sample_rate,
+                   "Vector should count number of trues equal to sample rate.");
+  common::SpinLatch::ScopedSpinLatch guard(&latch_);
+  samples_mask_[static_cast<uint8_t>(component)] = samples_mask;
 }
 
 void MetricsManager::ResetMetric(const MetricsComponent component) const {
@@ -98,10 +131,10 @@ void MetricsManager::ResetMetric(const MetricsComponent component) const {
 void MetricsManager::RegisterThread() {
   common::SpinLatch::ScopedSpinLatch guard(&latch_);
   const auto thread_id = std::this_thread::get_id();
-  TERRIER_ASSERT(stores_map_.count(thread_id) == 0, "This thread was already registered.");
-  auto result = stores_map_.emplace(thread_id,
-                                    new MetricsStore(common::ManagedPointer(this), enabled_metrics_, sample_interval_));
-  TERRIER_ASSERT(result.second, "Insertion to concurrent map failed.");
+  NOISEPAGE_ASSERT(stores_map_.count(thread_id) == 0, "This thread was already registered.");
+  auto result =
+      stores_map_.emplace(thread_id, new MetricsStore(common::ManagedPointer(this), enabled_metrics_, samples_mask_));
+  NOISEPAGE_ASSERT(result.second, "Insertion to concurrent map failed.");
   common::thread_context.metrics_store_ = result.first->second;
 }
 
@@ -113,55 +146,71 @@ void MetricsManager::UnregisterThread() {
   common::SpinLatch::ScopedSpinLatch guard(&latch_);
   const auto thread_id = std::this_thread::get_id();
   stores_map_.erase(thread_id);
-  TERRIER_ASSERT(stores_map_.count(thread_id) == 0, "Deletion from concurrent map failed.");
+  NOISEPAGE_ASSERT(stores_map_.count(thread_id) == 0, "Deletion from concurrent map failed.");
   common::thread_context.metrics_store_ = nullptr;
 }
 
-void MetricsManager::ToCSV() const {
+void MetricsManager::ToOutput(common::ManagedPointer<task::TaskManager> task_manager) const {
   common::SpinLatch::ScopedSpinLatch guard(&latch_);
   for (uint8_t component = 0; component < NUM_COMPONENTS; component++) {
     if (enabled_metrics_.test(component) && aggregated_metrics_[component] != nullptr) {
-      std::vector<std::ofstream> outfiles;
-      switch (static_cast<MetricsComponent>(component)) {
-        case MetricsComponent::LOGGING: {
-          OpenFiles<LoggingMetricRawData>(&outfiles);
-          break;
-        }
-        case MetricsComponent::TRANSACTION: {
-          OpenFiles<TransactionMetricRawData>(&outfiles);
-          break;
-        }
-        case MetricsComponent::GARBAGECOLLECTION: {
-          OpenFiles<GarbageCollectionMetricRawData>(&outfiles);
-          break;
-        }
-        case MetricsComponent::EXECUTION: {
-          OpenFiles<ExecutionMetricRawData>(&outfiles);
-          break;
-        }
-        case MetricsComponent::EXECUTION_PIPELINE: {
-          OpenFiles<PipelineMetricRawData>(&outfiles);
-          break;
-        }
-        case MetricsComponent::BIND_COMMAND: {
-          OpenFiles<BindCommandMetricRawData>(&outfiles);
-          break;
-        }
-        case MetricsComponent::EXECUTE_COMMAND: {
-          OpenFiles<ExecuteCommandMetricRawData>(&outfiles);
-          break;
-        }
-        case MetricsComponent::QUERY_TRACE: {
-          OpenFiles<QueryTraceMetricRawData>(&outfiles);
-          break;
-        }
+      auto output = metrics_output_[component];
+      if (output == MetricsOutput::CSV || output == MetricsOutput::CSV_AND_DB) {
+        ToCSV(component);
       }
-      aggregated_metrics_[component]->ToCSV(&outfiles);
-      for (auto &file : outfiles) {
-        file.close();
+
+      if (task_manager && (output == MetricsOutput::DB || output == MetricsOutput::CSV_AND_DB)) {
+        ToDB(component, task_manager);
       }
     }
   }
 }
 
-}  // namespace terrier::metrics
+void MetricsManager::ToDB(uint8_t component, common::ManagedPointer<task::TaskManager> task_manager) const {
+  NOISEPAGE_ASSERT(task_manager != nullptr, "MetricsManager::ToDB invoked with null task_manager");
+  aggregated_metrics_[component]->ToDB(task_manager);
+}
+
+void MetricsManager::ToCSV(uint8_t component) const {
+  std::vector<std::ofstream> outfiles;
+  switch (static_cast<MetricsComponent>(component)) {
+    case MetricsComponent::LOGGING: {
+      OpenFiles<LoggingMetricRawData>(&outfiles);
+      break;
+    }
+    case MetricsComponent::TRANSACTION: {
+      OpenFiles<TransactionMetricRawData>(&outfiles);
+      break;
+    }
+    case MetricsComponent::GARBAGECOLLECTION: {
+      OpenFiles<GarbageCollectionMetricRawData>(&outfiles);
+      break;
+    }
+    case MetricsComponent::EXECUTION: {
+      OpenFiles<ExecutionMetricRawData>(&outfiles);
+      break;
+    }
+    case MetricsComponent::EXECUTION_PIPELINE: {
+      OpenFiles<PipelineMetricRawData>(&outfiles);
+      break;
+    }
+    case MetricsComponent::BIND_COMMAND: {
+      OpenFiles<BindCommandMetricRawData>(&outfiles);
+      break;
+    }
+    case MetricsComponent::EXECUTE_COMMAND: {
+      OpenFiles<ExecuteCommandMetricRawData>(&outfiles);
+      break;
+    }
+    case MetricsComponent::QUERY_TRACE: {
+      OpenFiles<QueryTraceMetricRawData>(&outfiles);
+      break;
+    }
+  }
+  aggregated_metrics_[component]->ToCSV(&outfiles);
+  for (auto &file : outfiles) {
+    file.close();
+  }
+}
+
+}  // namespace noisepage::metrics

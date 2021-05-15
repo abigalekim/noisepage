@@ -5,8 +5,27 @@
 #include <vector>
 
 #include "common/json.h"
+#include "planner/plannodes/output_schema.h"
 
-namespace terrier::planner {
+namespace noisepage::planner {
+
+std::unique_ptr<AggregatePlanNode> AggregatePlanNode::Builder::Build() {
+  return std::unique_ptr<AggregatePlanNode>(
+      new AggregatePlanNode(std::move(children_), std::move(output_schema_), std::move(groupby_terms_),
+                            having_clause_predicate_, std::move(aggregate_terms_), aggregate_strategy_, plan_node_id_));
+}
+
+AggregatePlanNode::AggregatePlanNode(std::vector<std::unique_ptr<AbstractPlanNode>> &&children,
+                                     std::unique_ptr<OutputSchema> output_schema,
+                                     std::vector<GroupByTerm> groupby_terms,
+                                     common::ManagedPointer<parser::AbstractExpression> having_clause_predicate,
+                                     std::vector<AggregateTerm> aggregate_terms,
+                                     AggregateStrategyType aggregate_strategy, plan_node_id_t plan_node_id)
+    : AbstractPlanNode(std::move(children), std::move(output_schema), plan_node_id),
+      groupby_terms_(std::move(groupby_terms)),
+      having_clause_predicate_(having_clause_predicate),
+      aggregate_terms_(std::move(aggregate_terms)),
+      aggregate_strategy_(aggregate_strategy) {}
 
 common::hash_t AggregatePlanNode::Hash() const {
   common::hash_t hash = AbstractPlanNode::Hash();
@@ -117,6 +136,21 @@ std::vector<std::unique_ptr<parser::AbstractExpression>> AggregatePlanNode::From
   return exprs;
 }
 
+bool AggregatePlanNode::RequiresCleanup() const {
+  return std::any_of(aggregate_terms_.begin(), aggregate_terms_.end(),
+                     [](auto agg_term) { return agg_term->RequiresCleanup(); });
+}
+
+std::vector<size_t> AggregatePlanNode::GetMemoryAllocatingAggregatorIndexes() const {
+  std::vector<size_t> memory_allocating_aggregator_indexes;
+  for (size_t agg_term_idx = 0; agg_term_idx < aggregate_terms_.size(); agg_term_idx++) {
+    if (aggregate_terms_[agg_term_idx]->RequiresCleanup()) {
+      memory_allocating_aggregator_indexes.emplace_back(agg_term_idx);
+    }
+  }
+  return memory_allocating_aggregator_indexes;
+}
+
 DEFINE_JSON_BODY_DECLARATIONS(AggregatePlanNode);
 
-}  // namespace terrier::planner
+}  // namespace noisepage::planner

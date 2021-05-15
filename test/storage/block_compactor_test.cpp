@@ -12,9 +12,7 @@
 #include "test_util/test_harness.h"
 #include "transaction/deferred_action_manager.h"
 
-#define EXPORT_TABLE_NAME "test_table.arrow"
-
-namespace terrier {
+namespace noisepage {
 
 class ProjectedRowDeepEqual {
  public:
@@ -55,7 +53,7 @@ class ProjectedRowDeepEqualHash {
 using TupleMultiSet =
     std::unordered_map<storage::ProjectedRow *, uint32_t, ProjectedRowDeepEqualHash, ProjectedRowDeepEqual>;
 
-struct BlockCompactorTest : public ::terrier::TerrierTest {
+struct BlockCompactorTest : public ::noisepage::TerrierTest {
   storage::BlockStore block_store_{5000, 5000};
   std::default_random_engine generator_;
   storage::RecordBufferSegmentPool buffer_pool_{100000, 100000};
@@ -93,7 +91,10 @@ TEST_F(BlockCompactorTest, CompactionTest) {
     transaction::DeferredActionManager deferred_action_manager{common::ManagedPointer(&timestamp_manager)};
     transaction::TransactionManager txn_manager{common::ManagedPointer(&timestamp_manager),
                                                 common::ManagedPointer(&deferred_action_manager),
-                                                common::ManagedPointer(&buffer_pool_), true, DISABLED};
+                                                common::ManagedPointer(&buffer_pool_),
+                                                true,
+                                                false,
+                                                DISABLED};
     storage::GarbageCollector gc{common::ManagedPointer(&timestamp_manager),
                                  common::ManagedPointer(&deferred_action_manager), common::ManagedPointer(&txn_manager),
                                  DISABLED};
@@ -177,7 +178,10 @@ TEST_F(BlockCompactorTest, GatherTest) {
     transaction::DeferredActionManager deferred_action_manager{common::ManagedPointer(&timestamp_manager)};
     transaction::TransactionManager txn_manager{common::ManagedPointer(&timestamp_manager),
                                                 common::ManagedPointer(&deferred_action_manager),
-                                                common::ManagedPointer(&buffer_pool_), true, DISABLED};
+                                                common::ManagedPointer(&buffer_pool_),
+                                                true,
+                                                false,
+                                                DISABLED};
     storage::GarbageCollector gc{common::ManagedPointer(&timestamp_manager),
                                  common::ManagedPointer(&deferred_action_manager), common::ManagedPointer(&txn_manager),
                                  DISABLED};
@@ -284,7 +288,10 @@ TEST_F(BlockCompactorTest, DictionaryCompressionTest) {
     transaction::DeferredActionManager deferred_action_manager{common::ManagedPointer(&timestamp_manager)};
     transaction::TransactionManager txn_manager{common::ManagedPointer(&timestamp_manager),
                                                 common::ManagedPointer(&deferred_action_manager),
-                                                common::ManagedPointer(&buffer_pool_), true, DISABLED};
+                                                common::ManagedPointer(&buffer_pool_),
+                                                true,
+                                                false,
+                                                DISABLED};
     storage::GarbageCollector gc{common::ManagedPointer(&timestamp_manager),
                                  common::ManagedPointer(&deferred_action_manager), common::ManagedPointer(&txn_manager),
                                  DISABLED};
@@ -387,4 +394,4 @@ TEST_F(BlockCompactorTest, DictionaryCompressionTest) {
   }
 }
 
-}  // namespace terrier
+}  // namespace noisepage

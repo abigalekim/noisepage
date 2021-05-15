@@ -1,35 +1,16 @@
 #!/bin/bash
 
 ## =================================================================
-## TERRIER PACKAGE INSTALLATION
+## NOISEPAGE PACKAGE INSTALLATION
 ##
 ## This script will install all the packages that are needed to
 ## build and run the DBMS.
 ##
 ## Supported environments:
 ##  * Ubuntu 20.04
-##  * macOS
+##
+## Note that macOS support has been dropped.
 ## =================================================================
-
-# IMPORTANT: We special case the handling of the llvm package to make sure 
-# to get the correct version that we want. So it is not included in this list.
-# See the 'install_mac' function below.
-OSX_BUILD_PACKAGES=(\
-  "cmake" \
-  "coreutils" \
-  "doxygen" \
-  "git" \
-  "jemalloc" \
-  "libevent" \
-  "libpqxx" \
-  "openssl@1.1" \
-  "tbb" \
-)
-OSX_TEST_PACKAGES=(\
-  "ant" \
-  "postgresql" \
-  "lsof" \
-)
 
 LINUX_BUILD_PACKAGES=(\
   "build-essential" \
@@ -43,30 +24,44 @@ LINUX_BUILD_PACKAGES=(\
   "libjemalloc-dev" \
   "libpq-dev" \
   "libpqxx-dev" \
-  "libssl-dev" \
   "libtbb-dev" \
-  "zlib1g-dev" \
+  "libzmq3-dev" \
+  "lld" \
   "llvm-8" \
   "pkg-config" \
   "postgresql-client" \
-  "wget" \
   "python3-pip" \
+  "ninja-build"
+  "wget" \
+  "zlib1g-dev" \
+  "time" \
 )
 LINUX_TEST_PACKAGES=(\
   "ant" \
+  "ccache" \
   "curl" \
   "lcov" \
-  "ccache" \
   "lsof" \
 )
 
-# These are the packages that we will install with pip3
-# We will install these for both build and test.
-PYTHON_PACKAGES=(\
-  "pyarrow" \
-  "pandas" \
-  "requests" \
+# Packages to be installed through pip3.
+PYTHON_BUILD_PACKAGES=(
+)
+PYTHON_TEST_PACKAGES=(\
   "distro"  \
+  "lightgbm" \
+  "numpy" \
+  "pandas" \
+  "prettytable" \
+  "psutil" \
+  "psycopg2" \
+  "pyarrow" \
+  "pyzmq" \
+  "requests" \
+  "sklearn" \
+  "torch" \
+  "tqdm" \
+  "coverage" \
 )
 
 
@@ -119,7 +114,7 @@ give_up() {
   echo "Be sure to include the contents of this message."
   echo "Platform: $(uname -a)"
   echo
-  echo "https://github.com/cmu-db/terrier/issues"
+  echo "https://github.com/cmu-db/noisepage/issues"
   echo
   exit 1
 }
@@ -130,8 +125,6 @@ install() {
   VERSION=""
 
   case $UNAME in
-    DARWIN) install_mac ;;
-
     LINUX)
       DISTRO=$(cat /etc/os-release | grep '^ID=' | cut -d '=' -f 2 | tr "[:lower:]" "[:upper:]" | tr -d '"')
       VERSION=$(cat /etc/os-release | grep '^VERSION_ID=' | cut -d '"' -f 2)
@@ -156,54 +149,28 @@ install_pip() {
   rm get-pip.py
 }
 
-install_mac() {
-  # Install Homebrew.
-  if test ! $(which brew); then
-    echo "Installing Homebrew (https://brew.sh/)"
-    ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
-  fi
-  # Update Homebrew.
-  brew update
-  
-  # Install packages.
-  if [ "$INSTALL_TYPE" == "build" -o "$INSTALL_TYPE" = "all" ]; then
-    for pkg in "${OSX_BUILD_PACKAGES[@]}"; do
-      brew ls --versions $pkg || brew install $pkg
-    done
-  fi
-  if [ "$INSTALL_TYPE" == "test" -o "$INSTALL_TYPE" = "all" ]; then
-    for pkg in "${OSX_TEST_PACKAGES[@]}"; do
-      brew ls --versions $pkg || brew install $pkg
-    done
-  fi
-  
-  # Special case for llvm
-  (brew ls --versions llvm@8 | grep 8) || brew install llvm@8
-  
-  # Always install Python stuff
-  python3 -m pip --version || install_pip
-  for pkg in "${PYTHON_PACKAGES[@]}"; do
-    python3 -m pip show $pkg || python3 -m pip install $pkg
-  done
-}
-
 install_linux() {
   # Update apt-get.
   apt-get -y update
   
-  # Install packages.
-  if [ "$INSTALL_TYPE" == "build" -o "$INSTALL_TYPE" = "all" ]; then
-    apt-get -y install `( IFS=$' '; echo "${LINUX_BUILD_PACKAGES[*]}" )`
+  # Install packages. Note that word splitting is desired behavior.
+  if [ "$INSTALL_TYPE" == "build" ] || [ "$INSTALL_TYPE" = "all" ]; then
+    apt-get -y install $( IFS=$' '; echo "${LINUX_BUILD_PACKAGES[*]}" )
   fi
-  if [ "$INSTALL_TYPE" == "test" -o "$INSTALL_TYPE" = "all" ]; then
-    apt-get -y install `( IFS=$' '; echo "${LINUX_TEST_PACKAGES[*]}" )`
+  if [ "$INSTALL_TYPE" == "test" ] || [ "$INSTALL_TYPE" = "all" ]; then
+    apt-get -y install $( IFS=$' '; echo "${LINUX_TEST_PACKAGES[*]}" )
   fi
-  
-  # Always install Python stuff
-  # python3 -m pip --version || install_pip
-  for pkg in "${PYTHON_PACKAGES[@]}"; do
-    python3 -m pip show $pkg || python3 -m pip install $pkg
-  done
+
+  if [ "$INSTALL_TYPE" == "build" ] || [ "$INSTALL_TYPE" = "all" ]; then
+    for pkg in "${PYTHON_BUILD_PACKAGES[@]}"; do
+      python3 -m pip show $pkg || python3 -m pip install $pkg
+    done
+  fi
+  if [ "$INSTALL_TYPE" == "test" ] || [ "$INSTALL_TYPE" = "all" ]; then
+    for pkg in "${PYTHON_TEST_PACKAGES[@]}"; do
+      python3 -m pip show $pkg || python3 -m pip install $pkg
+    done
+  fi
 }
 
 main "$@"

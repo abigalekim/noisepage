@@ -7,7 +7,7 @@
 #include "parser/expression/operator_expression.h"
 #include "spdlog/fmt/fmt.h"
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 ArithmeticTranslator::ArithmeticTranslator(const parser::OperatorExpression &expr,
                                            CompilationContext *compilation_context)
@@ -35,9 +35,9 @@ ast::Expr *ArithmeticTranslator::DeriveValue(WorkContext *ctx, const ColumnValue
       return codegen->BinaryOp(parsing::Token::Type::PERCENT, left_val, right_val);
     default: {
       throw NOT_IMPLEMENTED_EXCEPTION(
-          fmt::format("Translation of arithmetic type {}", parser::ExpressionTypeToString(expr_type, true)));
+          fmt::format("Translation of arithmetic type {}", parser::ExpressionTypeToString(expr_type)));
     }
   }
 }
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

@@ -9,11 +9,11 @@
 #include "loggers/optimizer_logger.h"
 #include "parser/expression_defs.h"
 
-namespace terrier::parser {
+namespace noisepage::parser {
 class ConstantValueExpression;
 }
 
-namespace terrier::optimizer {
+namespace noisepage::optimizer {
 /**
  * ValueCondition
  * This class stores the expression type and value used in the WHERE clause as well as the
@@ -35,26 +35,6 @@ class ValueCondition {
   ValueCondition(catalog::col_oid_t column_id, std::string column_name, parser::ExpressionType type,
                  std::unique_ptr<parser::ConstantValueExpression> value)
       : column_id_{column_id}, column_name_{std::move(column_name)}, type_{type}, value_{std::move(value)} {}
-
-  /**
-   * Only with id. Default column_name to empty string.
-   * @param column_id
-   * @param type
-   * @param value
-   */
-  ValueCondition(catalog::col_oid_t column_id, parser::ExpressionType type,
-                 std::unique_ptr<parser::ConstantValueExpression> value)
-      : ValueCondition(column_id, "", type, std::move(value)) {}
-
-  /**
-   * Only with column name. Default column_id to be 0.
-   * @param column_name
-   * @param type
-   * @param value
-   */
-  ValueCondition(std::string column_name, parser::ExpressionType type,
-                 std::unique_ptr<parser::ConstantValueExpression> value)
-      : ValueCondition(catalog::col_oid_t(0), std::move(column_name), type, std::move(value)) {}
 
   /**
    * @return the column id
@@ -99,4 +79,4 @@ class ValueCondition {
    */
   std::unique_ptr<parser::ConstantValueExpression> value_;
 };
-}  // namespace terrier::optimizer
+}  // namespace noisepage::optimizer

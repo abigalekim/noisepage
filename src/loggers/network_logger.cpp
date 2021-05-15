@@ -1,10 +1,8 @@
 #include "loggers/network_logger.h"
 
-#include <memory>
-
-namespace terrier::network {
-
-std::shared_ptr<spdlog::logger> network_logger = nullptr;  // NOLINT
+namespace noisepage::network {
+#ifdef NOISEPAGE_USE_LOGGING
+common::SanctionedSharedPtr<spdlog::logger>::Ptr network_logger = nullptr;
 
 void InitNetworkLogger() {
   if (network_logger == nullptr) {
@@ -12,5 +10,5 @@ void InitNetworkLogger() {
     spdlog::register_logger(network_logger);
   }
 }
-
-}  // namespace terrier::network
+#endif
+}  // namespace noisepage::network

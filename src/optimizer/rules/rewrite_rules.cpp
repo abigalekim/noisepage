@@ -16,10 +16,11 @@
 #include "optimizer/optimizer_defs.h"
 #include "optimizer/physical_operators.h"
 #include "optimizer/properties.h"
+#include "optimizer/rules/unnesting_rules.h"
 #include "optimizer/util.h"
 #include "parser/expression_util.h"
 
-namespace terrier::optimizer {
+namespace noisepage::optimizer {
 
 ///////////////////////////////////////////////////////////////////////////////
 /// PushFilterThroughJoin
@@ -224,11 +225,13 @@ void RewritePushExplicitFilterThroughJoin::Transform(common::ManagedPointer<Abst
     if (join_predicate.GetExpr()->GetExpressionType() == parser::ExpressionType::COMPARE_IN) {
       semi_join = true;
       // Construct a new annotated expression and set its expression type to equal
-      auto new_join_expr = join_predicate.GetExpr()->Copy();
+      auto new_join_expr = join_predicate.GetExpr()->Copy().release();
       new_join_expr->SetExpressionType(parser::ExpressionType::COMPARE_EQUAL);
+      context->GetOptimizerContext()->RegisterExprWithTxn(new_join_expr);
+
       auto table_alias = join_predicate.GetTableAliasSet();
-      auto semi_join_predicate = AnnotatedExpression(
-          common::ManagedPointer<parser::AbstractExpression>(new_join_expr.release()), std::move(table_alias));
+      auto semi_join_predicate = AnnotatedExpression(common::ManagedPointer<parser::AbstractExpression>(new_join_expr),
+                                                     std::move(table_alias));
       semi_join_predicates.push_back(semi_join_predicate);
     } else {
       semi_join_predicates.push_back(join_predicate);
@@ -420,10 +423,10 @@ bool RewritePullFilterThroughMarkJoin::Check(common::ManagedPointer<AbstractOpti
   (void)plan;
 
   auto children = plan->GetChildren();
-  TERRIER_ASSERT(children.size() == 2, "MarkJoin should have two children");
+  NOISEPAGE_ASSERT(children.size() == 2, "MarkJoin should have two children");
 
   UNUSED_ATTRIBUTE auto r_grandchildren = children[0]->GetChildren();
-  TERRIER_ASSERT(r_grandchildren.size() == 1, "Filter should have only 1 child");
+  NOISEPAGE_ASSERT(r_grandchildren.size() == 1, "Filter should have only 1 child");
   return true;
 }
 
@@ -432,7 +435,7 @@ void RewritePullFilterThroughMarkJoin::Transform(common::ManagedPointer<Abstract
                                                  UNUSED_ATTRIBUTE OptimizationContext *context) const {
   OPTIMIZER_LOG_TRACE("RewritePullFilterThroughMarkJoin::Transform");
   UNUSED_ATTRIBUTE auto mark_join = input->Contents()->GetContentsAs<LogicalMarkJoin>();
-  TERRIER_ASSERT(mark_join->GetJoinPredicates().empty(), "MarkJoin should have zero children");
+  NOISEPAGE_ASSERT(mark_join->GetJoinPredicates().empty(), "MarkJoin should have zero children");
 
   auto join_children = input->GetChildren();
   auto filter_children = join_children[1]->GetChildren();
@@ -471,10 +474,10 @@ bool RewritePullFilterThroughAggregation::Check(common::ManagedPointer<AbstractO
   (void)plan;
 
   auto children = plan->GetChildren();
-  TERRIER_ASSERT(children.size() == 1, "AggregateAndGroupBy should have 1 child");
+  NOISEPAGE_ASSERT(children.size() == 1, "AggregateAndGroupBy should have 1 child");
 
   UNUSED_ATTRIBUTE auto r_grandchildren = children[1]->GetChildren();
-  TERRIER_ASSERT(r_grandchildren.size() == 1, "Filter should have 1 child");
+  NOISEPAGE_ASSERT(r_grandchildren.size() == 1, "Filter should have 1 child");
   return true;
 }
 
@@ -491,21 +494,8 @@ void RewritePullFilterThroughAggregation::Transform(common::ManagedPointer<Abstr
   std::vector<AnnotatedExpression> correlated_predicates;
   std::vector<AnnotatedExpression> normal_predicates;
   std::vector<common::ManagedPointer<parser::AbstractExpression>> new_groupby_cols;
-  for (auto &predicate : predicates) {
-    if (OptimizerUtil::IsSubset(child_group_aliases_set, predicate.GetTableAliasSet())) {
-      normal_predicates.emplace_back(predicate);
-    } else {
-      // Correlated predicate, already in the form of
-      // (outer_relation.a = (expr))
-      correlated_predicates.emplace_back(predicate);
-      auto root_expr = predicate.GetExpr();
-      if (root_expr->GetChild(0)->GetDepth() < root_expr->GetDepth()) {
-        new_groupby_cols.emplace_back(root_expr->GetChild(1).Get());
-      } else {
-        new_groupby_cols.emplace_back(root_expr->GetChild(0).Get());
-      }
-    }
-  }
+  ExtractCorrelatedPredicatesWithAggregate(predicates, child_group_aliases_set, &correlated_predicates,
+                                           &normal_predicates, &new_groupby_cols);
 
   if (correlated_predicates.empty()) {
     // No need to pull
@@ -543,4 +533,4 @@ void RewritePullFilterThroughAggregation::Transform(common::ManagedPointer<Abstr
   transformed->emplace_back(std::move(output));
 }
 
-}  // namespace terrier::optimizer
+}  // namespace noisepage::optimizer

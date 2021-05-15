@@ -19,7 +19,7 @@
 #include "parser/statements.h"
 #include "test_util/test_harness.h"
 
-namespace terrier::parser {
+namespace noisepage::parser {
 
 class ParserTestBase : public TerrierTest {
  protected:
@@ -27,8 +27,10 @@ class ParserTestBase : public TerrierTest {
    * Initialization
    */
   void SetUp() override {
+#if NOISEPAGE_USE_LOGGER
     parser_logger->set_level(spdlog::level::debug);
     spdlog::flush_every(std::chrono::seconds(1));
+#endif
   }
 
   void CheckTable(const std::unique_ptr<TableInfo> &table_info, const std::string &table_name) {
@@ -397,7 +399,7 @@ TEST_F(ParserTestBase, SelectTest) {
   auto select_stmt = result->GetStatement(0).CastManagedPointerTo<SelectStatement>();
   EXPECT_EQ(select_stmt->GetSelectTable()->GetTableName(), "foo");
   // CheckTable(select_stmt->from_->table_info_, std::string("foo"));
-  EXPECT_EQ(select_stmt->GetSelectColumns()[0]->GetExpressionType(), ExpressionType::STAR);
+  EXPECT_EQ(select_stmt->GetSelectColumns()[0]->GetExpressionType(), ExpressionType::TABLE_STAR);
 
   auto result2 = parser::PostgresParser::BuildParseTree("SELECT id FROM foo LIMIT 1 OFFSET 1;");
   EXPECT_EQ(result2->GetStatement(0)->GetType(), StatementType::SELECT);
@@ -657,7 +659,7 @@ TEST_F(ParserTestBase, OldBasicTest) {
   // cast result to derived class pointers
   auto statement = result->GetStatement(0).CastManagedPointerTo<SelectStatement>();
   EXPECT_EQ("foo", statement->GetSelectTable()->GetTableName());
-  EXPECT_EQ(ExpressionType::STAR, statement->GetSelectColumns()[0]->GetExpressionType());
+  EXPECT_EQ(ExpressionType::TABLE_STAR, statement->GetSelectColumns()[0]->GetExpressionType());
 }
 
 // NOLINTNEXTLINE
@@ -864,7 +866,7 @@ TEST_F(ParserTestBase, OldConstTest) {
   auto select_columns = statement->GetSelectColumns();
   EXPECT_EQ(3, select_columns.size());
 
-  std::vector<type::TypeId> types = {type::TypeId::VARCHAR, type::TypeId::INTEGER, type::TypeId::DECIMAL};
+  std::vector<type::TypeId> types = {type::TypeId::VARCHAR, type::TypeId::INTEGER, type::TypeId::REAL};
 
   for (size_t i = 0; i < select_columns.size(); i++) {
     auto column = select_columns[i];
@@ -965,7 +967,7 @@ TEST_F(ParserTestBase, OldNestedQueryTest) {
   EXPECT_EQ("t", statement->GetSelectTable()->GetAlias());
   auto nested_statement = statement->GetSelectTable()->GetSelect();
   EXPECT_EQ("foo", nested_statement->GetSelectTable()->GetTableName());
-  EXPECT_EQ(ExpressionType::STAR, nested_statement->GetSelectColumns()[0]->GetExpressionType());
+  EXPECT_EQ(ExpressionType::TABLE_STAR, nested_statement->GetSelectColumns()[0]->GetExpressionType());
 }
 
 // NOLINTNEXTLINE
@@ -1063,7 +1065,7 @@ TEST_F(ParserTestBase, OldExpressionUpdateTest) {
   auto upd0 = update_stmt->GetUpdateClauses().at(0);
   EXPECT_EQ(upd0->GetColumnName(), "s_quantity");
   auto constant = upd0->GetUpdateValue().CastManagedPointerTo<ConstantValueExpression>();
-  EXPECT_EQ(constant->GetReturnValueType(), type::TypeId::DECIMAL);
+  EXPECT_EQ(constant->GetReturnValueType(), type::TypeId::REAL);
   ASSERT_DOUBLE_EQ(constant->Peek<double>(), 48.0);
 
   // Test Second Set Condition
@@ -1232,7 +1234,7 @@ TEST_F(ParserTestBase, OldCreateTest) {
   // Check Third column
   column = create_stmt->GetColumns()[2];
   EXPECT_FALSE(column->IsPrimaryKey());
-  EXPECT_EQ(column->GetVarlenSize(), 255);
+  EXPECT_EQ(column->GetTypeModifier(), 255);
 
   // Check Foreign Key Constraint
   column = create_stmt->GetForeignKeys()[0];
@@ -1295,7 +1297,7 @@ TEST_F(ParserTestBase, OldCreateIndexTest) {
 
   // Check attributes
   EXPECT_EQ(create_stmt->GetCreateType(), CreateStatement::kIndex);
-  EXPECT_EQ(create_stmt->GetIndexType(), IndexType::BWTREE);
+  EXPECT_EQ(create_stmt->GetIndexType(), IndexType::BPLUSTREE);
   EXPECT_EQ(create_stmt->GetIndexName(), "ii");
   EXPECT_EQ(create_stmt->GetTableName(), "t");
 
@@ -1510,13 +1512,13 @@ TEST_F(ParserTestBase, OldDataTypeTest) {
   column = create_stmt->GetColumns()[1];
   EXPECT_EQ(column->GetColumnName(), "b");
   EXPECT_EQ(column->GetValueType(), type::TypeId::VARCHAR);
-  EXPECT_EQ(column->GetVarlenSize(), 1024);
+  EXPECT_EQ(column->GetTypeModifier(), 1024);
 
   // Check Third column
   column = create_stmt->GetColumns()[2];
   EXPECT_EQ(column->GetColumnName(), "c");
   EXPECT_EQ(column->GetValueType(), type::TypeId::VARBINARY);
-  EXPECT_EQ(column->GetVarlenSize(), 32);
+  EXPECT_EQ(column->GetTypeModifier(), 32);
 }
 
 // NOLINTNEXTLINE
@@ -1576,7 +1578,7 @@ TEST_F(ParserTestBase, OldCreateTriggerTest) {
 
 // NOLINTNEXTLINE
 TEST_F(ParserTestBase, OldDropTriggerTest) {
-  std::string query = "DROP TRIGGER if_dist_exists ON terrier.films;";
+  std::string query = "DROP TRIGGER if_dist_exists ON noisepage.films;";
   auto result = parser::PostgresParser::BuildParseTree(query);
   EXPECT_EQ(result->GetStatement(0)->GetType(), StatementType::DROP);
   auto drop_trigger_stmt = result->GetStatement(0).CastManagedPointerTo<DropStatement>();
@@ -1706,7 +1708,7 @@ TEST_F(ParserTestBase, OldTypeCastTest) {
   queries.emplace_back("INSERT INTO test_table VALUES (1, 2, '2017'::TEXT);");
   queries.emplace_back("INSERT INTO test_table VALUES (1, 2, '2017'::VARCHAR);");
 
-  std::vector<type::TypeId> types = {type::TypeId::INTEGER, type::TypeId::DECIMAL, type::TypeId::DECIMAL,
+  std::vector<type::TypeId> types = {type::TypeId::INTEGER, type::TypeId::REAL, type::TypeId::REAL,
                                      type::TypeId::VARCHAR, type::TypeId::VARCHAR};
 
   for (size_t i = 0; i < queries.size(); i++) {
@@ -1754,4 +1756,4 @@ TEST_F(ParserTestBase, OldTypeCastInExpressionTest) {
   }
 }
 
-}  // namespace terrier::parser
+}  // namespace noisepage::parser

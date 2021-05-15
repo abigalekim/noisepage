@@ -7,7 +7,7 @@
 #include "parser/expression/constant_value_expression.h"
 #include "planner/plannodes/output_schema.h"
 
-namespace terrier::execution::exec {
+namespace noisepage::execution::exec {
 /**
  * Used by the tpl executable to retrieve hard-coded test output schemas.
  */
@@ -25,7 +25,7 @@ class SampleOutput {
     // Sample output formats
     auto pred = std::make_unique<parser::ConstantValueExpression>(type::TypeId::BOOLEAN, execution::sql::BoolVal(true));
     planner::OutputSchema::Column int_col{"dummy", type::TypeId::INTEGER, pred->Copy()};
-    planner::OutputSchema::Column real_col{"dummy", type::TypeId::DECIMAL, pred->Copy()};
+    planner::OutputSchema::Column real_col{"dummy", type::TypeId::REAL, pred->Copy()};
     planner::OutputSchema::Column date_col{"dummy", type::TypeId::DATE, pred->Copy()};
     planner::OutputSchema::Column string_col{"dummy", type::TypeId::VARCHAR, pred->Copy()};
 
@@ -62,7 +62,7 @@ class SampleOutput {
   void InitTPCHOutput() {
     auto pred = std::make_unique<parser::ConstantValueExpression>(type::TypeId::BOOLEAN, execution::sql::BoolVal(true));
     planner::OutputSchema::Column int_col{"dummy", type::TypeId::INTEGER, pred->Copy()};
-    planner::OutputSchema::Column real_col{"dummy", type::TypeId::DECIMAL, pred->Copy()};
+    planner::OutputSchema::Column real_col{"dummy", type::TypeId::REAL, pred->Copy()};
     planner::OutputSchema::Column date_col{"dummy", type::TypeId::DATE, pred->Copy()};
     planner::OutputSchema::Column string_col{"dummy", type::TypeId::VARCHAR, pred->Copy()};
     // Q1 (two strings, 7 reals, 1 int)
@@ -143,4 +143,4 @@ class SampleOutput {
 
   std::unordered_map<std::string, planner::OutputSchema> schemas_;
 };
-}  // namespace terrier::execution::exec
+}  // namespace noisepage::execution::exec

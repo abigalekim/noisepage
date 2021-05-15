@@ -1,6 +1,7 @@
 #include "execution/compiler/operator/seq_scan_translator.h"
 
 #include "catalog/catalog_accessor.h"
+#include "common/error/error_code.h"
 #include "common/error/exception.h"
 #include "execution/compiler/codegen.h"
 #include "execution/compiler/compilation_context.h"
@@ -14,11 +15,11 @@
 #include "planner/plannodes/seq_scan_plan_node.h"
 #include "storage/sql_table.h"
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 SeqScanTranslator::SeqScanTranslator(const planner::SeqScanPlanNode &plan, CompilationContext *compilation_context,
                                      Pipeline *pipeline)
-    : OperatorTranslator(plan, compilation_context, pipeline, brain::ExecutionOperatingUnitType::SEQ_SCAN),
+    : OperatorTranslator(plan, compilation_context, pipeline, selfdriving::ExecutionOperatingUnitType::SEQ_SCAN),
       tvi_var_(GetCodeGen()->MakeFreshIdentifier("tvi")),
       vpi_var_(GetCodeGen()->MakeFreshIdentifier("vpi")),
       col_oids_var_(GetCodeGen()->MakeFreshIdentifier("col_oids")),
@@ -35,7 +36,12 @@ SeqScanTranslator::SeqScanTranslator(const planner::SeqScanPlanNode &plan, Compi
     local_filter_manager_ = pipeline->DeclarePipelineStateEntry("filterManager", fm_type);
   }
 
-  num_scans_ = CounterDeclare("num_scans");
+  tvi_base_ =
+      pipeline->DeclarePipelineStateEntry("tviBase", GetCodeGen()->BuiltinType(ast::BuiltinType::TableVectorIterator));
+  tvi_needs_free_ =
+      pipeline->DeclarePipelineStateEntry("tviNeedsFree", GetCodeGen()->BuiltinType(ast::BuiltinType::Bool));
+
+  num_scans_ = CounterDeclare("num_scans", pipeline);
 }
 
 bool SeqScanTranslator::HasPredicate() const {
@@ -129,12 +135,14 @@ void SeqScanTranslator::GenerateFilterClauseFunctions(util::RegionVector<ast::Fu
       auto translator = GetCompilationContext()->LookupTranslator(*predicate->GetChild(1));
       auto col_index = GetColOidIndex(cve->GetColumnOid());
       auto const_val = translator->DeriveValue(nullptr, nullptr);
-      builder.Append(codegen->VPIFilter(exec_ctx,                        // The execution context
-                                        vector_proj,                     // The vector projection
-                                        predicate->GetExpressionType(),  // Comparison type
-                                        col_index,                       // Column index
-                                        const_val,                       // Constant value
-                                        tid_list));                      // TID list
+      auto cmp_type = predicate->GetExpressionType();
+      cmp_type = cmp_type == parser::ExpressionType::COMPARE_IN ? parser::ExpressionType::COMPARE_EQUAL : cmp_type;
+      builder.Append(codegen->VPIFilter(exec_ctx,     // The execution context
+                                        vector_proj,  // The vector projection
+                                        cmp_type,     // Comparison type
+                                        col_index,    // Column index
+                                        const_val,    // Constant value
+                                        tid_list));   // TID list
     } else if (parser::ExpressionUtil::IsColumnCompareWithParam(*predicate)) {
       // TODO(WAN): temporary hacky implementation, poke Prashanth...
       auto cve = predicate->GetChild(0).CastManagedPointerTo<parser::ColumnValueExpression>();
@@ -159,7 +167,7 @@ void SeqScanTranslator::GenerateFilterClauseFunctions(util::RegionVector<ast::Fu
         case type::TypeId::BIGINT:
           builtin = ast::Builtin::GetParamBigInt;
           break;
-        case type::TypeId::DECIMAL:
+        case type::TypeId::REAL:
           builtin = ast::Builtin::GetParamDouble;
           break;
         case type::TypeId::DATE:
@@ -252,23 +260,47 @@ void SeqScanTranslator::ScanTable(WorkContext *ctx, FunctionBuilder *function) c
   tvi_loop.EndLoop();
 }
 
-void SeqScanTranslator::InitializeQueryState(FunctionBuilder *function) const { CounterSet(function, num_scans_, 0); }
-
 void SeqScanTranslator::InitializePipelineState(const Pipeline &pipeline, FunctionBuilder *function) const {
+  auto *codegen = GetCodeGen();
   if (HasPredicate()) {
-    auto *codegen = GetCodeGen();
     function->Append(codegen->FilterManagerInit(local_filter_manager_.GetPtr(codegen), GetExecutionContext()));
     for (const auto &clause : filters_) {
       function->Append(codegen->FilterManagerInsert(local_filter_manager_.GetPtr(codegen), clause));
     }
   }
+
+  InitializeCounters(pipeline, function);
 }
 
 void SeqScanTranslator::TearDownPipelineState(const Pipeline &pipeline, FunctionBuilder *function) const {
+  auto *codegen = GetCodeGen();
+
   if (HasPredicate()) {
     auto filter_manager = local_filter_manager_.GetPtr(GetCodeGen());
     function->Append(GetCodeGen()->FilterManagerFree(filter_manager));
   }
+
+  // if (pipelineState.tviNeedsFree)
+  If need_free(function, tvi_needs_free_.Get(codegen));
+  {
+    // @tableIterClose(&pipelineState.tviBase)
+    function->Append(codegen->TableIterClose(tvi_base_.GetPtr(codegen)));
+    // pipelineState.tviNeedsFree = false
+    function->Append(codegen->Assign(tvi_needs_free_.Get(codegen), codegen->ConstBool(false)));
+  }
+  need_free.EndIf();
+}
+
+void SeqScanTranslator::InitializeCounters(const Pipeline &pipeline, FunctionBuilder *function) const {
+  CounterSet(function, num_scans_, 0);
+}
+
+void SeqScanTranslator::RecordCounters(const Pipeline &pipeline, FunctionBuilder *function) const {
+  FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::SEQ_SCAN,
+                selfdriving::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline, CounterVal(num_scans_));
+  FeatureRecord(function, selfdriving::ExecutionOperatingUnitType::SEQ_SCAN,
+                selfdriving::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline, CounterVal(num_scans_));
+  FeatureArithmeticRecordMul(function, pipeline, GetTranslatorId(), CounterVal(num_scans_));
 }
 
 void SeqScanTranslator::PerformPipelineWork(WorkContext *context, FunctionBuilder *function) const {
@@ -276,16 +308,14 @@ void SeqScanTranslator::PerformPipelineWork(WorkContext *context, FunctionBuilde
 
   const bool declare_local_tvi = !GetPipeline()->IsParallel() || !GetPipeline()->IsDriver(this);
   if (declare_local_tvi) {
-    // var tviBase: TableVectorIterator
-    // var tvi = &tviBase
-    auto tvi_base = codegen->MakeFreshIdentifier("tviBase");
-    function->Append(codegen->DeclareVarNoInit(tvi_base, ast::BuiltinType::TableVectorIterator));
-    function->Append(codegen->DeclareVarWithInit(tvi_var_, codegen->AddressOf(tvi_base)));
+    // var tvi = &pipelineState.tviBase
+    function->Append(codegen->DeclareVarWithInit(tvi_var_, tvi_base_.GetPtr(codegen)));
     // Declare the col_oids variable.
     DeclareColOids(function);
     // @tableIterInit(tvi, exec_ctx, table_oid, col_oids)
     function->Append(
         codegen->TableIterInit(codegen->MakeExpr(tvi_var_), GetExecutionContext(), GetTableOid(), col_oids_var_));
+    function->Append(codegen->Assign(tvi_needs_free_.Get(codegen), codegen->ConstBool(true)));
   }
 
   auto declare_slot = codegen->DeclareVarNoInit(slot_var_, ast::BuiltinType::TupleSlot);
@@ -294,18 +324,16 @@ void SeqScanTranslator::PerformPipelineWork(WorkContext *context, FunctionBuilde
   // Scan it.
   ScanTable(context, function);
 
-  // Close TVI, if need be.
   if (declare_local_tvi) {
-    function->Append(codegen->TableIterClose(codegen->MakeExpr(tvi_var_)));
+    // @tableIterClose(&pipelineState.tviBase)
+    function->Append(codegen->TableIterClose(tvi_base_.GetPtr(codegen)));
+    // pipelineState.tviNeedsFree = false
+    function->Append(codegen->Assign(tvi_needs_free_.Get(codegen), codegen->ConstBool(false)));
   }
-}
 
-void SeqScanTranslator::FinishPipelineWork(const Pipeline &pipeline, FunctionBuilder *function) const {
-  FeatureRecord(function, brain::ExecutionOperatingUnitType::SEQ_SCAN,
-                brain::ExecutionOperatingUnitFeatureAttribute::NUM_ROWS, pipeline, CounterVal(num_scans_));
-  FeatureRecord(function, brain::ExecutionOperatingUnitType::SEQ_SCAN,
-                brain::ExecutionOperatingUnitFeatureAttribute::CARDINALITY, pipeline, CounterVal(num_scans_));
-  FeatureArithmeticRecordMul(function, pipeline, GetTranslatorId(), CounterVal(num_scans_));
+  if (!GetPipeline()->IsParallel()) {
+    RecordCounters(*GetPipeline(), function);
+  }
 }
 
 util::RegionVector<ast::FieldDecl *> SeqScanTranslator::GetWorkerParams() const {
@@ -368,4 +396,4 @@ std::vector<catalog::col_oid_t> SeqScanTranslator::MakeInputOids(const catalog::
   return op.GetColumnOids();
 }
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

@@ -6,10 +6,11 @@
 #include "common/scoped_timer.h"
 #include "common/thread_context.h"
 #include "metrics/metrics_store.h"
+#include "replication/primary_replication_manager.h"
 #include "transaction/transaction_context.h"
 #include "transaction/transaction_manager.h"
 
-namespace terrier::storage {
+namespace noisepage::storage {
 
 void LogSerializerTask::LogSerializerTaskLoop() {
   auto curr_sleep = serialization_interval_;
@@ -19,11 +20,12 @@ void LogSerializerTask::LogSerializerTaskLoop() {
 
   uint64_t num_bytes = 0, num_records = 0, num_txns = 0;
 
+  // Initialize whether to collect metrics outside of the spin loop so as not to count each loop iteration as a sample
+  // (by calling ComponentToRecord this increments the sample count)
+  bool logging_metrics_enabled =
+      common::thread_context.metrics_store_ != nullptr &&
+      common::thread_context.metrics_store_->ComponentToRecord(metrics::MetricsComponent::LOGGING);
   do {
-    const bool logging_metrics_enabled =
-        common::thread_context.metrics_store_ != nullptr &&
-        common::thread_context.metrics_store_->ComponentToRecord(metrics::MetricsComponent::LOGGING);
-
     if (logging_metrics_enabled && !common::thread_context.resource_tracker_.IsRunning()) {
       // start the operating unit resource tracker
       common::thread_context.resource_tracker_.Start();
@@ -47,18 +49,25 @@ void LogSerializerTask::LogSerializerTaskLoop() {
     std::tie(num_bytes, num_records, num_txns) = Process();
     curr_sleep = std::min(num_records > 0 ? serialization_interval_ : curr_sleep * 2, max_sleep);
 
-    if (logging_metrics_enabled && num_records > 0) {
-      // Stop the resource tracker for this operating unit
-      common::thread_context.resource_tracker_.Stop();
-      auto &resource_metrics = common::thread_context.resource_tracker_.GetMetrics();
-      common::thread_context.metrics_store_->RecordSerializerData(num_bytes, num_records, num_txns,
-                                                                  serialization_interval_.count(), resource_metrics);
+    if (num_records > 0) {
+      if (common::thread_context.resource_tracker_.IsRunning()) {
+        // Stop the resource tracker for this operating unit
+        common::thread_context.resource_tracker_.Stop();
+        auto &resource_metrics = common::thread_context.resource_tracker_.GetMetrics();
+        common::thread_context.metrics_store_->RecordSerializerData(num_bytes, num_records, num_txns,
+                                                                    serialization_interval_.count(), resource_metrics);
+      }
       num_bytes = num_records = num_txns = 0;
+      // Update whether to collect metrics only if we did work (starting a new event) so as not to count each loop
+      // iteration as a sample (by calling ComponentToRecord this increments the sample count)
+      logging_metrics_enabled =
+          common::thread_context.metrics_store_ != nullptr &&
+          common::thread_context.metrics_store_->ComponentToRecord(metrics::MetricsComponent::LOGGING);
     }
   } while (run_task_);
   // To be extra sure we processed everything
   Process();
-  TERRIER_ASSERT(flush_queue_.empty(), "Termination of LogSerializerTask should hand off all buffers to consumers");
+  NOISEPAGE_ASSERT(flush_queue_.empty(), "Termination of LogSerializerTask should hand off all buffers to consumers");
 }
 
 std::tuple<uint64_t, uint64_t, uint64_t> LogSerializerTask::Process() {
@@ -68,8 +77,8 @@ std::tuple<uint64_t, uint64_t, uint64_t> LogSerializerTask::Process() {
 
   {
     common::SpinLatch::ScopedSpinLatch serialization_guard(&serialization_latch_);
-    TERRIER_ASSERT(serialized_txns_.empty(),
-                   "Aggregated txn timestamps should have been handed off to TimestampManager");
+    NOISEPAGE_ASSERT(serialized_txns_.empty(),
+                     "Aggregated txn timestamps should have been handed off to TimestampManager");
     // We continually grab all the buffers until we find there are no new buffers. This way we serialize buffers that
     // came in during the previous serialization loop
 
@@ -86,13 +95,33 @@ std::tuple<uint64_t, uint64_t, uint64_t> LogSerializerTask::Process() {
         }
 
         temp_flush_queue_ = std::move(flush_queue_);
-        flush_queue_ = std::queue<RecordBufferSegment *>();
+        flush_queue_ = std::queue<std::pair<RecordBufferSegment *, transaction::TransactionPolicy>>();
         empty_ = true;
       }
 
       // Loop over all the new buffers we found
       while (!temp_flush_queue_.empty()) {
-        RecordBufferSegment *buffer = temp_flush_queue_.front();
+        auto &front = temp_flush_queue_.front();
+        RecordBufferSegment *buffer = front.first;
+        transaction::TransactionPolicy &policy = front.second;
+
+        // Check if the buffer's policy is compatible with the current filled buffer.
+        {
+          // The very first time that the log serializer task is executing, there is no filled buffer.
+          // Currently, the invariant is maintained that the filled buffer policy will ALWAYS have a value once buffers
+          // have started to be serialized.
+          if (filled_buffer_policy_.has_value()) {
+            // If the buffer policy is incompatible, then hand off the current filled buffer.
+            const bool compatible = filled_buffer_policy_.value() == policy;
+            if (!compatible) {
+              HandFilledBufferToWriter();
+              filled_buffer_policy_.reset();
+            }
+          }
+          // At this point, either filled_buffer_ is back to nullptr or the policy is compatible.
+          filled_buffer_policy_ = policy;
+        }
+
         temp_flush_queue_.pop();
 
         // Serialize the Redo buffer and release it to the buffer pool
@@ -110,13 +139,24 @@ std::tuple<uint64_t, uint64_t, uint64_t> LogSerializerTask::Process() {
     // Mark the last buffer that was written to as full
     if (buffers_processed) HandFilledBufferToWriter();
 
-    // Mark the last buffer that was written to as full
-    if (filled_buffer_ != nullptr) HandFilledBufferToWriter();
-
     // Bulk remove all the transactions we serialized. This prevents having to take the TimestampManager's latch once
     // for each timestamp we remove.
     for (const auto &txns : serialized_txns_) {
-      txns.first->RemoveTransactions(txns.second);
+      auto &txn_ids = txns.second;
+      bool all_txns_removed = txns.first->RemoveTransactions(txn_ids);
+
+      // If all the transactions were removed, then that all the txns seen so far have been serialized.
+      // Crucially, the oldest active transaction at the end of removal is actually the maximum of the txn_ids.
+      // This may trigger a manual update of what the true OAT is.
+      if (!txn_ids.empty()) {
+        transaction::timestamp_t newest_txn = *std::max_element(txn_ids.cbegin(), txn_ids.cend());
+        newest_txn_serialized_ = std::max(newest_txn_serialized_, newest_txn);
+      }
+
+      if (notify_oat_ && primary_replication_manager_ != DISABLED && all_txns_removed && oat_replicas_) {
+        primary_replication_manager_->NotifyReplicasOfOAT(newest_txn_serialized_);
+        oat_replicas_ = false;
+      }
     }
     serialized_txns_.clear();
   }
@@ -139,6 +179,24 @@ BufferedLogWriter *LogSerializerTask::GetCurrentWriteBuffer() {
  * Hand over the current buffer and commit callbacks for commit records in that buffer to the log consumer task
  */
 void LogSerializerTask::HandFilledBufferToWriter() {
+  NOISEPAGE_ASSERT(filled_buffer_policy_.has_value(),
+                   "Make sure policies are being set whenever filled_buffer_ is being updated or "
+                   "HandFilledBufferToWriter() is being called.");
+  const transaction::TransactionPolicy &txn_policy = filled_buffer_policy_.value();
+
+  // If the buffer exists, mark the buffer as ready for serialization.
+  if (filled_buffer_ != nullptr) {
+    // Prepare the buffer for serialization. This initializes a reference count on the batch of logs within.
+    filled_buffer_->PrepareForSerialization(txn_policy);
+  }
+  // Replicate the buffer if the buffer exists.
+  // However, even if the buffer doesn't exist, the commit callback needs to be invoked.
+  if (txn_policy.replication_ != transaction::ReplicationPolicy::DISABLE) {
+    NOISEPAGE_ASSERT(primary_replication_manager_ != DISABLED, "Replication enabled but replication manager disabled?");
+    primary_replication_manager_->ReplicateBatchOfRecords(filled_buffer_, commits_in_buffer_, txn_policy.replication_,
+                                                          newest_buffer_txn_);
+    oat_replicas_ = true;
+  }
   // Hand over the filled buffer
   filled_buffer_queue_->Enqueue(std::make_pair(filled_buffer_, commits_in_buffer_));
   // Signal disk log consumer task thread that a buffer has been handed over
@@ -154,6 +212,7 @@ std::tuple<uint64_t, uint64_t, uint64_t> LogSerializerTask::SerializeBuffer(
 
   // Iterate over all redo records in the redo buffer through the provided iterator
   for (LogRecord &record : *buffer_to_serialize) {
+    newest_buffer_txn_ = std::max(newest_buffer_txn_, record.TxnBegin());
     switch (record.RecordType()) {
       case (LogRecordType::COMMIT): {
         auto *commit_record = record.GetUnderlyingRecordBodyAs<CommitRecord>();
@@ -162,7 +221,9 @@ std::tuple<uint64_t, uint64_t, uint64_t> LogSerializerTask::SerializeBuffer(
         // necessary for the transaction's callback function to be invoked, but there is no need to serialize it, as
         // it corresponds to a transaction with nothing to redo.
         if (!commit_record->IsReadOnly()) num_bytes += SerializeRecord(record);
-        commits_in_buffer_.emplace_back(commit_record->CommitCallback(), commit_record->CommitCallbackArg());
+        commits_in_buffer_.emplace_back(CommitCallback{commit_record->CommitCallback(),
+                                                       commit_record->CommitCallbackArg(), record.TxnBegin(),
+                                                       commit_record->IsReadOnly()});
         // Once serialization is done, we notify the txn manager to let GC know this txn is ready to clean up
         serialized_txns_[commit_record->TimestampManager()].push_back(record.TxnBegin());
         num_txns++;
@@ -172,8 +233,8 @@ std::tuple<uint64_t, uint64_t, uint64_t> LogSerializerTask::SerializeBuffer(
       case (LogRecordType::ABORT): {
         // If an abort record shows up at all, the transaction cannot be read-only
         num_bytes += SerializeRecord(record);
-        auto *abord_record = record.GetUnderlyingRecordBodyAs<AbortRecord>();
-        serialized_txns_[abord_record->TimestampManager()].push_back(record.TxnBegin());
+        auto *abort_record = record.GetUnderlyingRecordBodyAs<AbortRecord>();
+        serialized_txns_[abort_record->TimestampManager()].push_back(record.TxnBegin());
         num_txns++;
         break;
       }
@@ -188,7 +249,7 @@ std::tuple<uint64_t, uint64_t, uint64_t> LogSerializerTask::SerializeBuffer(
   return {num_bytes, num_records, num_txns};
 }
 
-uint64_t LogSerializerTask::SerializeRecord(const terrier::storage::LogRecord &record) {
+uint64_t LogSerializerTask::SerializeRecord(const noisepage::storage::LogRecord &record) {
   uint64_t num_bytes = 0;
   // First, serialize out fields common across all LogRecordType's.
 
@@ -298,4 +359,4 @@ uint32_t LogSerializerTask::WriteValue(const void *val, const uint32_t size) {
   return size;
 }
 
-}  // namespace terrier::storage
+}  // namespace noisepage::storage

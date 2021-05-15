@@ -16,7 +16,7 @@
 // TODO(Gus, Wen): Replace VisitParameters
 // TODO(Gus, Wen): figure out global aggregates
 
-namespace terrier::planner {
+namespace noisepage::planner {
 
 using GroupByTerm = common::ManagedPointer<parser::AbstractExpression>;
 using AggregateTerm = common::ManagedPointer<parser::AggregateExpression>;
@@ -79,11 +79,7 @@ class AggregatePlanNode : public AbstractPlanNode {
      * Build the aggregate plan node
      * @return plan node
      */
-    std::unique_ptr<AggregatePlanNode> Build() {
-      return std::unique_ptr<AggregatePlanNode>(
-          new AggregatePlanNode(std::move(children_), std::move(output_schema_), std::move(groupby_terms_),
-                                having_clause_predicate_, std::move(aggregate_terms_), aggregate_strategy_));
-    }
+    std::unique_ptr<AggregatePlanNode> Build();
 
    protected:
     /**
@@ -112,16 +108,13 @@ class AggregatePlanNode : public AbstractPlanNode {
    * @param having_clause_predicate unique pointer to possible having clause predicate
    * @param aggregate_terms vector of aggregate terms for the aggregation
    * @param aggregate_strategy aggregation strategy to be used
+   * @param plan_node_id Plan node id
    */
   AggregatePlanNode(std::vector<std::unique_ptr<AbstractPlanNode>> &&children,
                     std::unique_ptr<OutputSchema> output_schema, std::vector<GroupByTerm> groupby_terms,
                     common::ManagedPointer<parser::AbstractExpression> having_clause_predicate,
-                    std::vector<AggregateTerm> aggregate_terms, AggregateStrategyType aggregate_strategy)
-      : AbstractPlanNode(std::move(children), std::move(output_schema)),
-        groupby_terms_(std::move(groupby_terms)),
-        having_clause_predicate_(having_clause_predicate),
-        aggregate_terms_(std::move(aggregate_terms)),
-        aggregate_strategy_(aggregate_strategy) {}
+                    std::vector<AggregateTerm> aggregate_terms, AggregateStrategyType aggregate_strategy,
+                    plan_node_id_t plan_node_id);
 
  public:
   /**
@@ -166,6 +159,16 @@ class AggregatePlanNode : public AbstractPlanNode {
   bool IsStaticAggregation() const { return GetGroupByTerms().empty(); }
 
   /**
+   * @return true if any of the aggregators used needs to be cleaned up, false otherwise
+   */
+  bool RequiresCleanup() const;
+
+  /**
+   * @return a list of indexes corresponding to the aggregators that allocate memory
+   */
+  std::vector<size_t> GetMemoryAllocatingAggregatorIndexes() const;
+
+  /**
    * @return the hashed value of this plan node
    */
   common::hash_t Hash() const override;
@@ -184,4 +187,4 @@ class AggregatePlanNode : public AbstractPlanNode {
   AggregateStrategyType aggregate_strategy_;
 };
 DEFINE_JSON_HEADER_DECLARATIONS(AggregatePlanNode);
-}  // namespace terrier::planner
+}  // namespace noisepage::planner

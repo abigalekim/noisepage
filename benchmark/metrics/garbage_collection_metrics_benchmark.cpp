@@ -6,7 +6,7 @@
 #include "metrics/metrics_thread.h"
 #include "storage/garbage_collector_thread.h"
 
-namespace terrier {
+namespace noisepage {
 
 class GarbageCollectionMetricsBenchmark : public benchmark::Fixture {
  public:
@@ -34,8 +34,10 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, TPCCish)(benchmark::State 
   for (auto _ : state) {
     for (const auto &file : metrics::GarbageCollectionMetricRawData::FILES) unlink(std::string(file).c_str());
     auto *const metrics_manager = new metrics::MetricsManager();
-    auto *const metrics_thread = new metrics::MetricsThread(common::ManagedPointer(metrics_manager), metrics_period_);
-    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION, 0);
+    auto *const metrics_thread =
+        new metrics::MetricsThread(common::ManagedPointer(metrics_manager), DISABLED, metrics_period_);
+    metrics_manager->SetMetricSampleRate(metrics::MetricsComponent::GARBAGECOLLECTION, 100);
+    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION);
 
     LargeDataTableBenchmarkObject tested(attr_sizes_, initial_table_size_, txn_length, insert_update_select_ratio,
                                          &block_store_, &buffer_pool_, &generator_, true);
@@ -43,7 +45,7 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, TPCCish)(benchmark::State 
                                         common::ManagedPointer(tested.GetTxnManager()), DISABLED);
     gc_thread_ = new storage::GarbageCollectorThread(common::ManagedPointer(gc_), gc_period_,
                                                      common::ManagedPointer(metrics_manager));
-    const auto result = tested.SimulateOltp(num_txns_, terrier::BenchmarkConfig::num_threads, metrics_manager);
+    const auto result = tested.SimulateOltp(num_txns_, noisepage::BenchmarkConfig::num_threads, metrics_manager);
     abort_count += result.first;
     state.SetIterationTime(static_cast<double>(result.second) / 1000.0);
     delete gc_thread_;
@@ -64,8 +66,10 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, HighAbortRate)(benchmark::
   for (auto _ : state) {
     for (const auto &file : metrics::GarbageCollectionMetricRawData::FILES) unlink(std::string(file).c_str());
     auto *const metrics_manager = new metrics::MetricsManager();
-    auto *const metrics_thread = new metrics::MetricsThread(common::ManagedPointer(metrics_manager), metrics_period_);
-    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION, 0);
+    auto *const metrics_thread =
+        new metrics::MetricsThread(common::ManagedPointer(metrics_manager), DISABLED, metrics_period_);
+    metrics_manager->SetMetricSampleRate(metrics::MetricsComponent::GARBAGECOLLECTION, 100);
+    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION);
 
     LargeDataTableBenchmarkObject tested(attr_sizes_, 1000, txn_length, insert_update_select_ratio, &block_store_,
                                          &buffer_pool_, &generator_, true);
@@ -73,7 +77,7 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, HighAbortRate)(benchmark::
                                         common::ManagedPointer(tested.GetTxnManager()), DISABLED);
     gc_thread_ = new storage::GarbageCollectorThread(common::ManagedPointer(gc_), gc_period_,
                                                      common::ManagedPointer(metrics_manager));
-    const auto result = tested.SimulateOltp(num_txns_, terrier::BenchmarkConfig::num_threads, metrics_manager);
+    const auto result = tested.SimulateOltp(num_txns_, noisepage::BenchmarkConfig::num_threads, metrics_manager);
     abort_count += result.first;
     state.SetIterationTime(static_cast<double>(result.second) / 1000.0);
     delete gc_thread_;
@@ -94,8 +98,10 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, SingleStatementInsert)(ben
   for (auto _ : state) {
     for (const auto &file : metrics::GarbageCollectionMetricRawData::FILES) unlink(std::string(file).c_str());
     auto *const metrics_manager = new metrics::MetricsManager();
-    auto *const metrics_thread = new metrics::MetricsThread(common::ManagedPointer(metrics_manager), metrics_period_);
-    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION, 0);
+    auto *const metrics_thread =
+        new metrics::MetricsThread(common::ManagedPointer(metrics_manager), DISABLED, metrics_period_);
+    metrics_manager->SetMetricSampleRate(metrics::MetricsComponent::GARBAGECOLLECTION, 100);
+    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION);
 
     LargeDataTableBenchmarkObject tested(attr_sizes_, 0, txn_length, insert_update_select_ratio, &block_store_,
                                          &buffer_pool_, &generator_, true);
@@ -103,7 +109,7 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, SingleStatementInsert)(ben
                                         common::ManagedPointer(tested.GetTxnManager()), DISABLED);
     gc_thread_ = new storage::GarbageCollectorThread(common::ManagedPointer(gc_), gc_period_,
                                                      common::ManagedPointer(metrics_manager));
-    const auto result = tested.SimulateOltp(num_txns_, terrier::BenchmarkConfig::num_threads, metrics_manager);
+    const auto result = tested.SimulateOltp(num_txns_, noisepage::BenchmarkConfig::num_threads, metrics_manager);
     abort_count += result.first;
     state.SetIterationTime(static_cast<double>(result.second) / 1000.0);
     delete gc_thread_;
@@ -124,8 +130,10 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, SingleStatementUpdate)(ben
   for (auto _ : state) {
     for (const auto &file : metrics::GarbageCollectionMetricRawData::FILES) unlink(std::string(file).c_str());
     auto *const metrics_manager = new metrics::MetricsManager();
-    auto *const metrics_thread = new metrics::MetricsThread(common::ManagedPointer(metrics_manager), metrics_period_);
-    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION, 0);
+    auto *const metrics_thread =
+        new metrics::MetricsThread(common::ManagedPointer(metrics_manager), DISABLED, metrics_period_);
+    metrics_manager->SetMetricSampleRate(metrics::MetricsComponent::GARBAGECOLLECTION, 100);
+    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION);
 
     LargeDataTableBenchmarkObject tested(attr_sizes_, initial_table_size_, txn_length, insert_update_select_ratio,
                                          &block_store_, &buffer_pool_, &generator_, true);
@@ -133,7 +141,7 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, SingleStatementUpdate)(ben
                                         common::ManagedPointer(tested.GetTxnManager()), DISABLED);
     gc_thread_ = new storage::GarbageCollectorThread(common::ManagedPointer(gc_), gc_period_,
                                                      common::ManagedPointer(metrics_manager));
-    const auto result = tested.SimulateOltp(num_txns_, terrier::BenchmarkConfig::num_threads, metrics_manager);
+    const auto result = tested.SimulateOltp(num_txns_, noisepage::BenchmarkConfig::num_threads, metrics_manager);
     abort_count += result.first;
     state.SetIterationTime(static_cast<double>(result.second) / 1000.0);
     delete gc_thread_;
@@ -154,8 +162,10 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, SingleStatementSelect)(ben
   for (auto _ : state) {
     for (const auto &file : metrics::GarbageCollectionMetricRawData::FILES) unlink(std::string(file).c_str());
     auto *const metrics_manager = new metrics::MetricsManager();
-    auto *const metrics_thread = new metrics::MetricsThread(common::ManagedPointer(metrics_manager), metrics_period_);
-    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION, 0);
+    auto *const metrics_thread =
+        new metrics::MetricsThread(common::ManagedPointer(metrics_manager), DISABLED, metrics_period_);
+    metrics_manager->SetMetricSampleRate(metrics::MetricsComponent::GARBAGECOLLECTION, 100);
+    metrics_manager->EnableMetric(metrics::MetricsComponent::GARBAGECOLLECTION);
 
     LargeDataTableBenchmarkObject tested(attr_sizes_, initial_table_size_, txn_length, insert_update_select_ratio,
                                          &block_store_, &buffer_pool_, &generator_, true);
@@ -163,7 +173,7 @@ BENCHMARK_DEFINE_F(GarbageCollectionMetricsBenchmark, SingleStatementSelect)(ben
                                         common::ManagedPointer(tested.GetTxnManager()), DISABLED);
     gc_thread_ = new storage::GarbageCollectorThread(common::ManagedPointer(gc_), gc_period_,
                                                      common::ManagedPointer(metrics_manager));
-    const auto result = tested.SimulateOltp(num_txns_, terrier::BenchmarkConfig::num_threads, metrics_manager);
+    const auto result = tested.SimulateOltp(num_txns_, noisepage::BenchmarkConfig::num_threads, metrics_manager);
     abort_count += result.first;
     state.SetIterationTime(static_cast<double>(result.second) / 1000.0);
     delete gc_thread_;
@@ -196,4 +206,4 @@ BENCHMARK_REGISTER_F(GarbageCollectionMetricsBenchmark, SingleStatementSelect)
     ->Unit(benchmark::kMillisecond)
     ->UseManualTime()
     ->MinTime(1);
-}  // namespace terrier
+}  // namespace noisepage

@@ -9,7 +9,7 @@
 #include "test_util/storage_test_util.h"
 #include "test_util/test_harness.h"
 
-namespace terrier {
+namespace noisepage {
 // This is a simple test for the behavior of varlen entry with various creation parameters, particularly
 // that the various flags are stored correctly and that inlining and prefixes are handled correctly.
 // NOLINTNEXTLINE
@@ -167,4 +167,18 @@ TEST(VarlenEntryTests, OwnershipEquality) {
             storage::VarlenEntry::Create(reinterpret_cast<const byte *const>(matthew_was_here.data()),
                                          matthew_was_here.length(), true));
 }
-}  // namespace terrier
+
+// NOLINTNEXTLINE
+TEST(VarlenEntryTests, JsonTest) {
+  std::string hello_world = "hello world";
+  const auto entry = storage::VarlenEntry::Create(hello_world);
+
+  nlohmann::json json;
+  nlohmann::adl_serializer<storage::VarlenEntry>::to_json(json, entry);
+  EXPECT_EQ(json.at("string_content").get<std::string>(), hello_world);
+
+  auto deserialized_entry = nlohmann::adl_serializer<storage::VarlenEntry>::from_json(json);
+  EXPECT_EQ(deserialized_entry, entry);
+}
+
+}  // namespace noisepage

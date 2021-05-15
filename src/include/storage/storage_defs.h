@@ -13,6 +13,7 @@
 #include "common/constants.h"
 #include "common/container/bitmap.h"
 #include "common/hash_util.h"
+#include "common/json.h"
 #include "common/macros.h"
 #include "common/object_pool.h"
 #include "common/strong_typedef.h"
@@ -20,7 +21,7 @@
 #include "transaction/transaction_defs.h"
 #include "type/type_id.h"
 
-namespace terrier::storage {
+namespace noisepage::storage {
 
 // Internally we use the sign bit to represent if a column is varlen or not. Down to the implementation detail though,
 // we always allocate 16 bytes for a varlen entry, with the first 8 bytes being the pointer to the value and following
@@ -117,10 +118,10 @@ class TupleSlot {
    * @param offset the offset of this slot in its block
    */
   TupleSlot(const RawBlock *const block, const uint32_t offset) : bytes_(reinterpret_cast<uintptr_t>(block) | offset) {
-    TERRIER_ASSERT(!((static_cast<uintptr_t>(common::Constants::BLOCK_SIZE) - 1) & ((uintptr_t)block)),
-                   "Address must be aligned to block size (last bits zero).");
-    TERRIER_ASSERT(offset < common::Constants::BLOCK_SIZE,
-                   "Offset must be smaller than block size (to fit in the last bits).");
+    NOISEPAGE_ASSERT(!((static_cast<uintptr_t>(common::Constants::BLOCK_SIZE) - 1) & ((uintptr_t)block)),
+                     "Address must be aligned to block size (last bits zero).");
+    NOISEPAGE_ASSERT(offset < common::Constants::BLOCK_SIZE,
+                     "Offset must be smaller than block size (to fit in the last bits).");
   }
 
   /**
@@ -249,10 +250,10 @@ class VarlenEntry {
   static VarlenEntry Create(const byte *content, uint32_t size, bool reclaim) {
     VarlenEntry result;
     if (size <= InlineThreshold()) {
-      TERRIER_ASSERT(!reclaim, "can't reclaim this");
+      NOISEPAGE_ASSERT(!reclaim, "can't reclaim this");
       return CreateInline(content, size);
     }
-    TERRIER_ASSERT(size > InlineThreshold(), "small varlen values should be inlined");
+    NOISEPAGE_ASSERT(size > InlineThreshold(), "small varlen values should be inlined");
     result.size_ = reclaim ? size : (INT32_MIN | size);  // the first bit denotes whether we can reclaim it
     std::memcpy(result.prefix_, content, sizeof(uint32_t));
     result.content_ = content;
@@ -285,7 +286,7 @@ class VarlenEntry {
    * @return constructed VarlenEntry object
    */
   static VarlenEntry CreateInline(const byte *content, uint32_t size) {
-    TERRIER_ASSERT(size <= InlineThreshold(), "varlen value must be small enough for inlining to happen");
+    NOISEPAGE_ASSERT(size <= InlineThreshold(), "varlen value must be small enough for inlining to happen");
     VarlenEntry result;
     result.size_ = size;
     // Small string: just store the prefix as part of inline storage.
@@ -356,8 +357,8 @@ class VarlenEntry {
   std::vector<T> DeserializeArray() const {
     const byte *contents = Content();
     size_t num_elements = *reinterpret_cast<const size_t *>(contents);
-    TERRIER_ASSERT(sizeof(T) == (Size() - sizeof(size_t)) / num_elements,
-                   "Deserializing the wrong element types from array");
+    NOISEPAGE_ASSERT(sizeof(T) == (Size() - sizeof(size_t)) / num_elements,
+                     "Deserializing the wrong element types from array");
     const T *payload = reinterpret_cast<const T *>(contents + sizeof(size_t));
     return std::vector<T>(payload, payload + num_elements);
   }
@@ -451,12 +452,12 @@ class VarlenEntry {
       } else {
         // inspect the remaining non-inlined bytes, skipping prefix-size bytes since those are duplicated at the start
         // of content
-        TERRIER_ASSERT(std::memcmp(left.content_, &left.prefix_, PrefixSize()) == 0,
-                       "The prefix should be at the beginning of the non-inlined content again. We assert this since "
-                       "we're about to skip it on the real comparison.");
-        TERRIER_ASSERT(std::memcmp(right.content_, &right.prefix_, PrefixSize()) == 0,
-                       "The prefix should be at the beginning of the non-inlined content again. We assert this since "
-                       "we're about to skip it on the real comparison.");
+        NOISEPAGE_ASSERT(std::memcmp(left.content_, &left.prefix_, PrefixSize()) == 0,
+                         "The prefix should be at the beginning of the non-inlined content again. We assert this since "
+                         "we're about to skip it on the real comparison.");
+        NOISEPAGE_ASSERT(std::memcmp(right.content_, &right.prefix_, PrefixSize()) == 0,
+                         "The prefix should be at the beginning of the non-inlined content again. We assert this since "
+                         "we're about to skip it on the real comparison.");
         if (std::memcmp(left.content_ + PrefixSize(), right.content_ + PrefixSize(), left.Size() - PrefixSize()) == 0) {
           return EqualityCheck;
         }
@@ -559,19 +560,57 @@ struct VarlenContentCompare {
   bool operator()(const VarlenEntry &lhs, const VarlenEntry &rhs) const { return VarlenEntry::Compare(lhs, rhs) < 0; }
 };
 
-}  // namespace terrier::storage
+}  // namespace noisepage::storage
 
 namespace std {
 /**
  * Implements std::hash for TupleSlot.
  */
 template <>
-struct hash<terrier::storage::TupleSlot> {
+struct hash<noisepage::storage::TupleSlot> {
   /**
    * Returns the hash of the slot's contents.
    * @param slot the slot to be hashed.
    * @return the hash of the slot.
    */
-  size_t operator()(const terrier::storage::TupleSlot &slot) const { return hash<uintptr_t>()(slot.bytes_); }
+  size_t operator()(const noisepage::storage::TupleSlot &slot) const { return hash<uintptr_t>()(slot.bytes_); }
+};
+
+/**
+ * Implements std::hash for VarlenEntry.
+ */
+template <>
+struct hash<noisepage::storage::VarlenEntry> {
+  /**
+   * Returns the hash of a VarlenEntry.
+   * @param key VarlenEntry to be hashed.
+   * @return the hash of the VarlenEntry.
+   */
+  size_t operator()(const noisepage::storage::VarlenEntry &key) const { return key.Hash(); }
 };
 }  // namespace std
+
+namespace nlohmann {
+/** Struct to help convert VarlenEntry to and from JSON */
+template <>
+struct adl_serializer<noisepage::storage::VarlenEntry> {
+  /**
+   * Convert a VarlenEntry to json
+   * @param[out] j the output json
+   * @param varlen_entry the VarlenEntry to convert
+   */
+  static void to_json(json &j, noisepage::storage::VarlenEntry varlen_entry) {  // NOLINT
+    j["string_content"] = varlen_entry.StringView();
+  }
+
+  /**
+   * Convert a json to a VarlenEntry
+   * @param j json representation of a VarlenEntry
+   * @return VarlenEntry object parsed from json
+   */
+  static noisepage::storage::VarlenEntry from_json(const json &j) {  // NOLINT
+    auto string_content = j.at("string_content").get<std::string_view>();
+    return noisepage::storage::VarlenEntry::Create(string_content);
+  }
+};
+}  // namespace nlohmann

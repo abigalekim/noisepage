@@ -1,14 +1,25 @@
+#include "settings/settings_common.h"  // NOLINT
+
+// clang-format off
 // SETTING_<type>(name, description, default_value, min_value, max_value, is_mutable, callback_fn)
 
-// Terrier port
+// NoisePage port
 SETTING_int(
     port,
-    "Terrier port (default: 15721)",
+    "NoisePage port (default: 15721)",
     15721,
     1024,
     65535,
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_string(
+    network_identity,
+    "The identity of this NoisePage instance (default: primary)",
+    "primary",
+    false,
+    noisepage::settings::Callbacks::NoOp
 )
 
 // Preallocated connection handler threads and maximum number of connected clients
@@ -19,7 +30,7 @@ SETTING_int(
     1,
     256,
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 // Path to socket file for Unix domain sockets
@@ -28,18 +39,18 @@ SETTING_string(
     "The directory for the Unix domain socket (default: /tmp/)",
     "/tmp/",
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 // RecordBufferSegmentPool size limit
 SETTING_int(
     record_buffer_segment_size,
-    "The maximum number of record buffer segments in the system. (default: 100000)",
-    100000,
+    "The maximum number of record buffer segments in the system. (default: 1000000)",
+    1000000,
     1,
-    100000000,
+    1000000000,
     true,
-    terrier::settings::Callbacks::BufferSegmentPoolSizeLimit
+    noisepage::settings::Callbacks::BufferSegmentPoolSizeLimit
 )
 
 // RecordBufferSegmentPool reuse limit
@@ -48,20 +59,20 @@ SETTING_int(
     "The minimum number of record buffer segments to keep allocated in the system (default: 10000)",
     10000,
     1,
-    1000000,
+    1000000000,
     true,
-    terrier::settings::Callbacks::BufferSegmentPoolReuseLimit
+    noisepage::settings::Callbacks::BufferSegmentPoolReuseLimit
 )
 
 // BlockStore for catalog size limit
 SETTING_int(
     block_store_size,
-    "The maximum number of storage blocks for the catalog. (default: 100000)",
-    100000,
-    1,
+    "The maximum number of storage blocks for the catalog. (default: 1000000)",
     1000000,
+    1,
+    1000000000,
     true,
-    terrier::settings::Callbacks::BlockStoreSizeLimit
+    noisepage::settings::Callbacks::BlockStoreSizeLimit
 )
 
 // BlockStore for catalog reuse limit
@@ -70,9 +81,9 @@ SETTING_int(
     "The minimum number of storage blocks for the catalog to keep allocated (default: 1000)",
     1000,
     1,
-    1000000,
+    1000000000,
     true,
-    terrier::settings::Callbacks::BlockStoreReuseLimit
+    noisepage::settings::Callbacks::BlockStoreReuseLimit
 )
 
 // Garbage collector thread interval
@@ -83,7 +94,7 @@ SETTING_int(
     1,
     10000,
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 // Write ahead logging
@@ -92,7 +103,7 @@ SETTING_bool(
     "Whether WAL is enabled (default: true)",
     true,
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 // Path to log file for WAL
@@ -101,7 +112,25 @@ SETTING_string(
     "The path to the log file for the WAL (default: wal.log)",
     "wal.log",
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
+)
+
+// Asynchronous commit txns when WAL is enabled
+SETTING_bool(
+    wal_async_commit_enable,
+    "Enable commit confirmation before results are durable in the WAL. (default: false)",
+    false,
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+// Asynchronous replication instead of synchronous replication, if replication is enabled.
+SETTING_bool(
+    async_replication_enable,
+    "Asynchronous replication instead of synchronous replication, if replication is enabled. (default: false)",
+    false,
+    false,
+    noisepage::settings::Callbacks::NoOp
 )
 
 // Number of buffers log manager can use to buffer logs
@@ -112,7 +141,7 @@ SETTING_int64(
     2,
     10000,
     true,
-    terrier::settings::Callbacks::WalNumBuffers
+    noisepage::settings::Callbacks::WalNumBuffers
 )
 
 // Log Serialization interval
@@ -122,8 +151,8 @@ SETTING_int(
     100,
     1,
     10000,
-    false,
-    terrier::settings::Callbacks::NoOp
+    true,
+    noisepage::settings::Callbacks::WalSerializationInterval
 )
 
 // Log file persisting interval
@@ -134,14 +163,14 @@ SETTING_int(
     1,
     10000,
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 // Optimizer timeout
 SETTING_int(task_execution_timeout,
             "Maximum allowed length of time (in ms) for task execution step of optimizer, "
             "assuming one plan has been found (default 5000)",
-            5000, 1000, 60000, false, terrier::settings::Callbacks::NoOp)
+            5000, 1000, 60000, false, noisepage::settings::Callbacks::NoOp)
 
 // Parallel Execution
 SETTING_bool(
@@ -149,7 +178,7 @@ SETTING_bool(
     "Whether parallel execution for scans is enabled",
     true,
     true,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 // Log file persisting threshold
@@ -160,7 +189,7 @@ SETTING_int64(
     (1 << 12) /* 4KB */,
     (1 << 24) /* 16MB */,
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 SETTING_int(
@@ -170,7 +199,70 @@ SETTING_int(
     -15,
     3,
     true,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_int64(
+    workload_forecast_interval,
+    "Interval to be used to break query traces into WorkloadForecastSegment. (default : 1000000, unit: micro-second)",
+    1000000,
+    1000000,
+    1000000000000,
+    true,
+
+    // When this callback is implemented in the near-fuure, do not
+    // forget to update QueryTraceMetricRawData::QUERY_SEGMENT_INTERVAL
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_int64(
+    sequence_length,
+    "Length of a planning data sequence. (default: 10, unit: workload_forecast_intervals)",
+    10,
+    1,
+    1000000,
+    true,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_int64(
+    horizon_length,
+    "Length of the planning horizon. (default: 30, unit: workload_forecast_intervals)",
+    30,
+    1,
+    1000000,
+    true,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_int64(
+    pilot_interval,
+    "Interval of Pilot Planning Invocation when planning enabled. (default : 1000000, unit: micro-second)",
+    1000000,
+    1000000,
+    10000000000,
+    true,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_int64(
+    forecast_train_interval,
+    "Interval of Pilot Forecast Train Invocation when planning enabled. (default : 120000000, unit: micro-second)",
+    120000000,
+    120000000,
+    10000000000,
+    true,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_int64(
+    pilot_memory_constraint,
+    "Maximum amount of memory allowed for the pilot to plan. (default : 1000000000, unit: byte)",
+    1000000000,
+    0,
+    100000000000,
+    true,
+    noisepage::settings::Callbacks::NoOp
 )
 
 SETTING_bool(
@@ -178,71 +270,123 @@ SETTING_bool(
     "Metrics sub-system for various components (default: true).",
     true,
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 SETTING_bool(
-    metrics_logging,
+    use_metrics_thread,
+    "Use a thread for the metrics sub-system (default: true).",
+    true,
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_bool(
+    use_pilot_thread,
+    "Use a thread for the pilot (default: false).",
+    false,
+    true,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_bool(
+    pilot_planning,
+    "Start planning in pilot (default: false).",
+    false,
+    true,
+    noisepage::settings::Callbacks::PilotEnablePlanning
+)
+
+SETTING_bool(
+    logging_metrics_enable,
     "Metrics collection for the Logging component (default: false).",
     false,
     true,
-    terrier::settings::Callbacks::MetricsLogging
+    noisepage::settings::Callbacks::MetricsLogging
 )
 
 SETTING_bool(
-    metrics_transaction,
+    transaction_metrics_enable,
     "Metrics collection for the TransactionManager component (default: false).",
     false,
     true,
-    terrier::settings::Callbacks::MetricsTransaction
+    noisepage::settings::Callbacks::MetricsTransaction
 )
 
 SETTING_bool(
-    metrics_gc,
+    gc_metrics_enable,
     "Metrics collection for the GarbageCollector component (default: false).",
     false,
     true,
-    terrier::settings::Callbacks::MetricsGC
+    noisepage::settings::Callbacks::MetricsGC
 )
 
 SETTING_bool(
-    metrics_query_trace,
+    query_trace_metrics_enable,
     "Metrics collection for Query Traces (default: false).",
     false,
     true,
-    terrier::settings::Callbacks::MetricsQueryTrace
+    noisepage::settings::Callbacks::MetricsQueryTrace
+)
+
+SETTING_string(
+    query_trace_metrics_output,
+    "Output type for Query Traces Metrics (default: CSV, values: NONE, CSV, DB, CSV_AND_DB)",
+    "CSV",
+    true,
+    noisepage::settings::Callbacks::MetricsQueryTraceOutput
 )
 
 SETTING_bool(
-    metrics_execution,
+    execution_metrics_enable,
     "Metrics collection for the Execution component (default: false).",
     false,
     true,
-    terrier::settings::Callbacks::MetricsExecution
+    noisepage::settings::Callbacks::MetricsExecution
 )
 
 SETTING_bool(
-    metrics_pipeline,
+    pipeline_metrics_enable,
     "Metrics collection for the ExecutionEngine pipelines (default: false).",
     false,
     true,
-    terrier::settings::Callbacks::MetricsPipeline
+    noisepage::settings::Callbacks::MetricsPipeline
+)
+
+SETTING_int(
+    pipeline_metrics_sample_rate,
+    "Sampling rate of metrics collection for the ExecutionEngine pipelines.",
+    10,
+    0,
+    100,
+    true,
+    noisepage::settings::Callbacks::MetricsPipelineSampleRate
+)
+
+SETTING_int(
+  logging_metrics_sample_rate,
+  "Sampling rate of metrics collection for logging.",
+  100,
+  0,
+  100,
+  true,
+  noisepage::settings::Callbacks::MetricsLoggingSampleRate
 )
 
 SETTING_bool(
-    metrics_bind_command,
+    bind_command_metrics_enable,
     "Metrics collection for the bind command.",
     false,
     true,
-    terrier::settings::Callbacks::MetricsBindCommand
+    noisepage::settings::Callbacks::MetricsBindCommand
 )
 
 SETTING_bool(
-    metrics_execute_command,
+    execute_command_metrics_enable,
     "Metrics collection for the execute command.",
     false,
     true,
-    terrier::settings::Callbacks::MetricsExecuteCommand
+    noisepage::settings::Callbacks::MetricsExecuteCommand
 )
 
 SETTING_bool(
@@ -250,7 +394,7 @@ SETTING_bool(
     "Extended Query protocol caches physical plans and generated code after first execution. Warning: bugs with DDL changes.",
     true,
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 SETTING_bool(
@@ -258,7 +402,7 @@ SETTING_bool(
     "Compile queries to native machine code using LLVM, rather than relying on TPL interpretation (default: false).",
     false,
     false,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 SETTING_string(
@@ -266,7 +410,7 @@ SETTING_string(
     "The name of the application (default: NO_NAME)",
     "NO_NAME",
     true,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
 
 SETTING_string(
@@ -274,5 +418,146 @@ SETTING_string(
     "The default isolation level (default: TRANSACTION_READ_COMMITTED)",
     "TRANSACTION_READ_COMMITTED",
     true,
-    terrier::settings::Callbacks::NoOp
+    noisepage::settings::Callbacks::NoOp
 )
+
+SETTING_int(
+    num_parallel_execution_threads,
+    "Number of threads for parallel query execution (default: 1)",
+    1,
+    1,
+    128,
+    true,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_bool(
+    counters_enable,
+    "Whether to use counters (default: false)",
+    false,
+    true,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_bool(
+    messenger_enable,
+    "Whether to enable the messenger (default: false)",
+    false,
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_int(
+    messenger_port,
+    "NoisePage messenger port (default: 9022)",
+    9022,
+    1024,
+    65535,
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_bool(
+    replication_enable,
+    "Whether to enable replication (default: false)",
+    false,
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_int(
+    replication_port,
+    "NoisePage replication port (default: 15445)",
+    15445,
+    1024,
+    65535,
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_string(
+    replication_hosts_path,
+    "The path to the hosts.conf file for replication (default: ./replication.config)",
+    "./replication.config",
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_bool(
+    model_server_enable,
+    "Whether to enable the ModelServerManager (default: false)",
+    false,
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+// Relative path assuming binary locate at PROJECT_ROOT/build/bin/, and model_server.py at PROJECT_ROOT/script/model
+SETTING_string(
+    model_server_path,
+    "The python model server script to invoke (default: ../../script/model/model_server.py)",
+    "../../script/model/model_server.py",
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+// Save path of the model relative to the build path (model saved at ${BUILD_ABS_PATH} + SAVE_PATH)
+SETTING_string(
+    ou_model_save_path,
+    "Save path of the OU model relative to the build path (default: ou_model_map.pickle)",
+    "ou_model_map.pickle",
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_string(
+    interference_model_save_path,
+    "Save path of the forecast model relative to the build path (default: interference_direct_model.pickle)",
+    "interference_direct_model.pickle",
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_string(
+    forecast_model_save_path,
+    "Save path of the forecast model relative to the build path (default: forecast_model.pickle)",
+    "forecast_model.pickle",
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_int(
+    forecast_sample_limit,
+    "Limit on number of samples for workload forecasting",
+    5,
+    0,
+    100,
+    true,
+    noisepage::settings::Callbacks::ForecastSampleLimit
+)
+
+SETTING_int(
+    task_pool_size,
+    "Number of threads available to the task manager",
+    1,
+    1,
+    32,
+    true,
+    noisepage::settings::Callbacks::TaskPoolSize
+)
+
+SETTING_string(
+    startup_ddl_path,
+    "Path to startup DDL (default: bin/startup.sql)",
+    "bin/startup.sql",
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+
+SETTING_string(
+    bytecode_handlers_path,
+    "The path to the bytecode handlers bitcode file (default: ./bytecode_handlers_ir.bc)",
+    "./bytecode_handlers_ir.bc",
+    false,
+    noisepage::settings::Callbacks::NoOp
+)
+    // clang-format on

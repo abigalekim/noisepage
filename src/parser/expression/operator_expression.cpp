@@ -1,8 +1,9 @@
 #include "parser/expression/operator_expression.h"
 
+#include "binder/sql_node_visitor.h"
 #include "common/json.h"
 
-namespace terrier::parser {
+namespace noisepage::parser {
 
 std::unique_ptr<AbstractExpression> OperatorExpression::Copy() const {
   std::vector<std::unique_ptr<AbstractExpression>> children;
@@ -34,10 +35,15 @@ void OperatorExpression::DeriveReturnValueType() {
     return t1->GetReturnValueType() < t2->GetReturnValueType();
   });
   const auto &type = (*max_type_child)->GetReturnValueType();
-  TERRIER_ASSERT(type <= type::TypeId::DECIMAL, "Invalid operand type in Operator Expression.");
+  NOISEPAGE_ASSERT(type <= type::TypeId::REAL, "Invalid operand type in Operator Expression.");
+  // TODO(Matt): What is this assertion doing? Why is order of the enum important?
   this->SetReturnValueType(type);
+}
+
+void OperatorExpression::Accept(common::ManagedPointer<binder::SqlNodeVisitor> v) {
+  v->Visit(common::ManagedPointer(this));
 }
 
 DEFINE_JSON_BODY_DECLARATIONS(OperatorExpression);
 
-}  // namespace terrier::parser
+}  // namespace noisepage::parser

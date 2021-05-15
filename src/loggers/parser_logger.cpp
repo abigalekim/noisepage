@@ -1,10 +1,8 @@
 #include "loggers/parser_logger.h"
 
-#include <memory>
-
-namespace terrier::parser {
-
-std::shared_ptr<spdlog::logger> parser_logger = nullptr;  // NOLINT
+namespace noisepage::parser {
+#ifdef NOISEPAGE_USE_LOGGING
+common::SanctionedSharedPtr<spdlog::logger>::Ptr parser_logger = nullptr;
 
 void InitParserLogger() {
   if (parser_logger == nullptr) {
@@ -12,5 +10,5 @@ void InitParserLogger() {
     spdlog::register_logger(parser_logger);
   }
 }
-
-}  // namespace terrier::parser
+#endif
+}  // namespace noisepage::parser

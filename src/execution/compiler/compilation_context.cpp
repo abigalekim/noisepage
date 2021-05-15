@@ -4,7 +4,6 @@
 #include <atomic>
 #include <sstream>
 
-#include "brain/operating_unit_recorder.h"
 #include "common/error/exception.h"
 #include "common/macros.h"
 #include "execution/ast/context.h"
@@ -23,6 +22,7 @@
 #include "execution/compiler/expression/star_translator.h"
 #include "execution/compiler/expression/unary_translator.h"
 #include "execution/compiler/function_builder.h"
+#include "execution/compiler/operator/analyze_translator.h"
 #include "execution/compiler/operator/csv_scan_translator.h"
 #include "execution/compiler/operator/delete_translator.h"
 #include "execution/compiler/operator/hash_aggregation_translator.h"
@@ -41,6 +41,7 @@
 #include "execution/compiler/operator/static_aggregation_translator.h"
 #include "execution/compiler/operator/update_translator.h"
 #include "execution/compiler/pipeline.h"
+#include "execution/exec/execution_settings.h"
 #include "parser/expression/abstract_expression.h"
 #include "parser/expression/column_value_expression.h"
 #include "parser/expression/comparison_expression.h"
@@ -63,28 +64,33 @@
 #include "planner/plannodes/limit_plan_node.h"
 #include "planner/plannodes/nested_loop_join_plan_node.h"
 #include "planner/plannodes/order_by_plan_node.h"
+#include "planner/plannodes/plan_meta_data.h"
 #include "planner/plannodes/projection_plan_node.h"
 #include "planner/plannodes/seq_scan_plan_node.h"
 #include "planner/plannodes/set_op_plan_node.h"
 #include "planner/plannodes/update_plan_node.h"
+#include "self_driving/modeling/operating_unit_recorder.h"
 #include "spdlog/fmt/fmt.h"
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 namespace {
 // A unique ID generator used to generate globally unique TPL function names and keep track of query ID for minirunners.
 std::atomic<uint32_t> unique_ids{0};
 }  // namespace
 
-CompilationContext::CompilationContext(ExecutableQuery *query, catalog::CatalogAccessor *accessor,
-                                       const CompilationMode mode)
+CompilationContext::CompilationContext(ExecutableQuery *query, query_id_t query_id, catalog::CatalogAccessor *accessor,
+                                       const CompilationMode mode, const exec::ExecutionSettings &settings)
     : unique_id_(unique_ids++),
+      query_id_(query_id),
       query_(query),
       mode_(mode),
       codegen_(query_->GetContext(), accessor),
       query_state_var_(codegen_.MakeIdentifier("queryState")),
       query_state_type_(codegen_.MakeIdentifier("QueryState")),
-      query_state_(query_state_type_, [this](CodeGen *codegen) { return codegen->MakeExpr(query_state_var_); }) {}
+      query_state_(query_state_type_, [this](CodeGen *codegen) { return codegen->MakeExpr(query_state_var_); }),
+      counters_enabled_(settings.GetIsCountersEnabled()),
+      pipeline_metrics_enabled_(settings.GetIsPipelineMetricsEnabled()) {}
 
 ast::FunctionDecl *CompilationContext::GenerateInitFunction() {
   const auto name = codegen_.MakeIdentifier(GetFunctionPrefix() + "_Init");
@@ -114,7 +120,8 @@ ast::FunctionDecl *CompilationContext::GenerateTearDownFunction() {
   return builder.Finish();
 }
 
-void CompilationContext::GeneratePlan(const planner::AbstractPlanNode &plan) {
+void CompilationContext::GeneratePlan(const planner::AbstractPlanNode &plan,
+                                      common::ManagedPointer<planner::PlanMetaData> plan_meta_data) {
   exec_ctx_ =
       query_state_.DeclareStateEntry(GetCodeGen(), "execCtx", codegen_.PointerType(ast::BuiltinType::ExecutionContext));
 
@@ -154,14 +161,22 @@ void CompilationContext::GeneratePlan(const planner::AbstractPlanNode &plan) {
     // Extract and record the translators.
     // Pipelines require obtaining feature IDs, but features don't exist until translators are extracted.
     // Therefore translator extraction must happen before pipelines are generated.
-    brain::OperatingUnitRecorder recorder(common::ManagedPointer(codegen_.GetCatalogAccessor()),
-                                          common::ManagedPointer(codegen_.GetAstContext()),
-                                          common::ManagedPointer(pipeline), query_->GetQueryText());
+    selfdriving::OperatingUnitRecorder recorder(common::ManagedPointer(codegen_.GetCatalogAccessor()),
+                                                common::ManagedPointer(codegen_.GetAstContext()),
+                                                common::ManagedPointer(pipeline), plan_meta_data);
     auto features = recorder.RecordTranslators(pipeline->GetTranslators());
     codegen_.GetPipelineOperatingUnits()->RecordOperatingUnit(pipeline->GetPipelineId(), std::move(features));
 
     pipeline->Prepare(query_->GetExecutionSettings());
-    pipeline->GeneratePipeline(&main_builder, query_id_t{unique_id_});
+    {
+      util::RegionVector<ast::FunctionDecl *> pipeline_decls(query_->GetContext()->GetRegion());
+      for (auto &[_, op] : ops_) {
+        (void)_;
+        op->DefineTLSDependentHelperFunctions(*pipeline, &pipeline_decls);
+      }
+      main_builder.DeclareAll(pipeline_decls);
+    }
+    pipeline->GeneratePipeline(&main_builder);
   }
 
   // Register the tear-down function.
@@ -176,27 +191,27 @@ void CompilationContext::GeneratePlan(const planner::AbstractPlanNode &plan) {
 }
 
 // static
-std::unique_ptr<ExecutableQuery> CompilationContext::Compile(const planner::AbstractPlanNode &plan,
-                                                             const exec::ExecutionSettings &exec_settings,
-                                                             catalog::CatalogAccessor *accessor,
-                                                             const CompilationMode mode,
-                                                             common::ManagedPointer<const std::string> query_text) {
+std::unique_ptr<ExecutableQuery> CompilationContext::Compile(
+    const planner::AbstractPlanNode &plan, const exec::ExecutionSettings &exec_settings,
+    catalog::CatalogAccessor *accessor, const CompilationMode mode, std::optional<execution::query_id_t> override_qid,
+    common::ManagedPointer<planner::PlanMetaData> plan_meta_data) {
   // The query we're generating code for.
   auto query = std::make_unique<ExecutableQuery>(plan, exec_settings);
-  // TODO(Lin): Hacking... remove this after getting the counters in
-  query->SetQueryText(query_text);
+  if (override_qid.has_value()) {
+    query->SetQueryId(override_qid.value());
+  }
 
   // Generate the plan for the query
-  CompilationContext ctx(query.get(), accessor, mode);
-  ctx.GeneratePlan(plan);
+  CompilationContext ctx(query.get(), query->GetQueryId(), accessor, mode, exec_settings);
+  ctx.GeneratePlan(plan, plan_meta_data);
 
   // Done
   return query;
 }
 
 uint32_t CompilationContext::RegisterPipeline(Pipeline *pipeline) {
-  TERRIER_ASSERT(std::find(pipelines_.begin(), pipelines_.end(), pipeline) == pipelines_.end(),
-                 "Duplicate pipeline in context");
+  NOISEPAGE_ASSERT(std::find(pipelines_.begin(), pipelines_.end(), pipeline) == pipelines_.end(),
+                   "Duplicate pipeline in context");
   pipelines_.push_back(pipeline);
   return pipelines_.size();
 }
@@ -287,6 +302,11 @@ void CompilationContext::Prepare(const planner::AbstractPlanNode &plan, Pipeline
       translator = std::make_unique<IndexCreateTranslator>(create_index, this, pipeline);
       break;
     }
+    case planner::PlanNodeType::ANALYZE: {
+      const auto &analyze = dynamic_cast<const planner::AnalyzePlanNode &>(plan);
+      translator = std::make_unique<AnalyzeTranslator>(analyze, this, pipeline);
+      break;
+    }
     default: {
       throw NOT_IMPLEMENTED_EXCEPTION(fmt::format("code generation for plan node type '{}'",
                                                   planner::PlanNodeTypeToString(plan.GetPlanNodeType())));
@@ -371,9 +391,8 @@ void CompilationContext::Prepare(const parser::AbstractExpression &expression) {
       break;
     }
     default: {
-      throw NOT_IMPLEMENTED_EXCEPTION(
-          fmt::format("Code generation for expression type '{}' not supported.",
-                      parser::ExpressionTypeToString(expression.GetExpressionType(), false)));
+      throw NOT_IMPLEMENTED_EXCEPTION(fmt::format("Code generation for expression type '{}' not supported.",
+                                                  parser::ExpressionTypeToString(expression.GetExpressionType())));
     }
   }
 
@@ -404,4 +423,4 @@ util::RegionVector<ast::FieldDecl *> CompilationContext::QueryParams() const {
 
 ast::Expr *CompilationContext::GetExecutionContextPtrFromQueryState() { return exec_ctx_.Get(&codegen_); }
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

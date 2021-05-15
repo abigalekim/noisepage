@@ -6,15 +6,15 @@
 #include "execution/compiler/operator/operator_translator.h"
 #include "execution/compiler/pipeline_driver.h"
 
-namespace terrier::catalog {
+namespace noisepage::catalog {
 class Schema;
-}  // namespace terrier::catalog
+}  // namespace noisepage::catalog
 
-namespace terrier::planner {
+namespace noisepage::planner {
 class DeletePlanNode;
-}  // namespace terrier::planner
+}  // namespace noisepage::planner
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 /**
  * Delete Translator
@@ -36,10 +36,8 @@ class DeleteTranslator : public OperatorTranslator, public PipelineDriver {
    */
   void DefineHelperFunctions(util::RegionVector<ast::FunctionDecl *> *decls) override {}
 
-  /**
-   * Initialize the counters.
-   */
-  void InitializeQueryState(FunctionBuilder *function) const override;
+  /** Initialize the storage interface and counters. */
+  void InitializePipelineState(const Pipeline &pipeline, FunctionBuilder *function) const override;
 
   /**
    * Implement deletion logic where it fills in the delete PR obtained from the StorageInterface struct
@@ -48,6 +46,9 @@ class DeleteTranslator : public OperatorTranslator, public PipelineDriver {
    * @param function The pipeline generating function.
    */
   void PerformPipelineWork(WorkContext *context, FunctionBuilder *function) const override;
+
+  /** Tear down the storage interface. */
+  void TearDownPipelineState(const Pipeline &pipeline, FunctionBuilder *function) const override;
 
   /** Record the counters. */
   void FinishPipelineWork(const Pipeline &pipeline, FunctionBuilder *function) const override;
@@ -84,8 +85,8 @@ class DeleteTranslator : public OperatorTranslator, public PipelineDriver {
   void GenIndexDelete(FunctionBuilder *builder, WorkContext *context, const catalog::index_oid_t &index_oid) const;
 
  private:
-  // Deleter storage interface struct.
-  ast::Identifier deleter_;
+  // Storage interface for deletes.
+  StateDescriptor::Entry si_deleter_;
 
   // Column oids of the table we are deleting from.
   ast::Identifier col_oids_;
@@ -94,4 +95,4 @@ class DeleteTranslator : public OperatorTranslator, public PipelineDriver {
   StateDescriptor::Entry num_deletes_;
 };
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler

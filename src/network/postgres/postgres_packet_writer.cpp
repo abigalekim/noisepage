@@ -5,7 +5,7 @@
 #include "network/postgres/postgres_defs.h"
 #include "network/postgres/postgres_protocol_util.h"
 
-namespace terrier::network {
+namespace noisepage::network {
 
 void PostgresPacketWriter::WriteReadyForQuery(NetworkTransactionStateType txn_status) {
   BeginPacket(NetworkMessageType::PG_READY_FOR_QUERY).AppendRawValue(txn_status).EndPacket();
@@ -58,6 +58,21 @@ void PostgresPacketWriter::WriteParameterDescription(const std::vector<type::Typ
   EndPacket();
 }
 
+void PostgresPacketWriter::WriteExplainRowDescription() {
+  BeginPacket(NetworkMessageType::PG_ROW_DESCRIPTION);
+  AppendValue<int16_t>(static_cast<int16_t>(1));  // number of columns
+  AppendString("QUERY PLAN", true);               // column name
+  AppendValue<int32_t>(0);                        // table oid
+  AppendValue<int16_t>(0);                        // column oid
+  AppendValue(static_cast<int32_t>(
+      PostgresValueType::TEXT));  // postgres expects this return type, which is why we're special-casing this function
+  AppendValue<int16_t>(-1);       // variable length
+
+  AppendValue<int32_t>(-1);  // type modifier, generally -1 (see pg_attribute.atttypmod)
+  AppendValue<int16_t>(static_cast<int16_t>(network::FieldFormat::text));  // format code for the field
+  EndPacket();
+}
+
 void PostgresPacketWriter::WriteRowDescription(const std::vector<planner::OutputSchema::Column> &columns,
                                                const std::vector<FieldFormat> &field_formats) {
   BeginPacket(NetworkMessageType::PG_ROW_DESCRIPTION).AppendValue<int16_t>(static_cast<int16_t>(columns.size()));
@@ -65,9 +80,9 @@ void PostgresPacketWriter::WriteRowDescription(const std::vector<planner::Output
   for (uint32_t i = 0; i < columns.size(); i++) {
     const auto col_type = columns[i].GetType();
 
-    TERRIER_ASSERT(field_formats.size() == columns.size() || field_formats.size() == 1,
-                   "Field formats can either be the size of the number of columns, or size 1 where they all use the "
-                   "same format");
+    NOISEPAGE_ASSERT(field_formats.size() == columns.size() || field_formats.size() == 1,
+                     "Field formats can either be the size of the number of columns, or size 1 where they all use the "
+                     "same format");
     const auto field_format = field_formats[i < field_formats.size() ? i : 0];
 
     // TODO(Matt): Figure out how to get table oid and column oids in the OutputSchema (Optimizer's job?)
@@ -158,8 +173,17 @@ void PostgresPacketWriter::WriteCommandComplete(const QueryType query_type, cons
     case QueryType::QUERY_DROP_SCHEMA:
       WriteCommandComplete("DROP SCHEMA");
       break;
+    case QueryType::QUERY_EXPLAIN:
+      WriteCommandComplete("EXPLAIN");
+      break;
     case QueryType::QUERY_SET:
       WriteCommandComplete("SET");
+      break;
+    case QueryType::QUERY_SHOW:
+      WriteCommandComplete("SHOW");
+      break;
+    case QueryType::QUERY_ANALYZE:
+      WriteCommandComplete("ANALYZE");
       break;
     default:
       WriteCommandComplete("This QueryType needs a completion message!");
@@ -260,8 +284,8 @@ void PostgresPacketWriter::WriteDataRow(const byte *const tuple,
 template <class native_type, class val_type>
 void PostgresPacketWriter::WriteBinaryVal(const execution::sql::Val *const val, const type::TypeId type) {
   const auto *const casted_val = reinterpret_cast<const val_type *const>(val);
-  TERRIER_ASSERT(type::TypeUtil::GetTypeSize(type) == sizeof(native_type),
-                 "Mismatched native type size and size reported by TypeUtil.");
+  NOISEPAGE_ASSERT(type::TypeUtil::GetTypeSize(type) == sizeof(native_type),
+                   "Mismatched native type size and size reported by TypeUtil.");
   // write the length, write the attribute
   AppendValue<int32_t>(static_cast<int32_t>(type::TypeUtil::GetTypeSize(type)))
       .AppendValue<native_type>(static_cast<native_type>(casted_val->val_));
@@ -270,8 +294,8 @@ void PostgresPacketWriter::WriteBinaryVal(const execution::sql::Val *const val, 
 template <class native_type, class val_type>
 void PostgresPacketWriter::WriteBinaryValNeedsToNative(const execution::sql::Val *const val, const type::TypeId type) {
   const auto *const casted_val = reinterpret_cast<const val_type *const>(val);
-  TERRIER_ASSERT(type::TypeUtil::GetTypeSize(type) == sizeof(native_type),
-                 "Mismatched native type size and size reported by TypeUtil.");
+  NOISEPAGE_ASSERT(type::TypeUtil::GetTypeSize(type) == sizeof(native_type),
+                   "Mismatched native type size and size reported by TypeUtil.");
   // write the length, write the attribute
   AppendValue<int32_t>(static_cast<int32_t>(type::TypeUtil::GetTypeSize(type)))
       .AppendValue<native_type>(static_cast<native_type>(casted_val->val_.ToNative()));
@@ -304,7 +328,7 @@ uint32_t PostgresPacketWriter::WriteBinaryAttribute(const execution::sql::Val *c
         WriteBinaryVal<bool, execution::sql::BoolVal>(val, type);
         break;
       }
-      case type::TypeId::DECIMAL: {
+      case type::TypeId::REAL: {
         WriteBinaryVal<double, execution::sql::Real>(val, type);
         break;
       }
@@ -352,7 +376,7 @@ uint32_t PostgresPacketWriter::WriteTextAttribute(const execution::sql::Val *con
         AppendValue<int32_t>(static_cast<int32_t>(str_view.length())).AppendStringView(str_view, false);
         return execution::sql::ValUtil::GetSqlSize(type);
       }
-      case type::TypeId::DECIMAL: {
+      case type::TypeId::REAL: {
         auto *real_val = reinterpret_cast<const execution::sql::Real *const>(val);
         string_value = std::to_string(real_val->val_);
         break;
@@ -390,4 +414,4 @@ uint32_t PostgresPacketWriter::WriteTextAttribute(const execution::sql::Val *con
   return execution::sql::ValUtil::GetSqlSize(type);
 }
 
-}  // namespace terrier::network
+}  // namespace noisepage::network

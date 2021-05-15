@@ -1,9 +1,7 @@
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
-#include "benchmark_util/data_table_benchmark_util.h"
 #include "binder/bind_node_visitor.h"
 #include "catalog/catalog.h"
 #include "catalog/postgres/pg_proc.h"
@@ -17,9 +15,8 @@
 #include "parser/expression/subquery_expression.h"
 #include "parser/postgresparser.h"
 #include "parser/statements.h"
-#include "storage/garbage_collector.h"
+#include "storage/sql_table.h"
 #include "test_util/test_harness.h"
-#include "transaction/deferred_action_manager.h"
 #include "transaction/transaction_manager.h"
 
 using std::make_tuple;
@@ -27,7 +24,7 @@ using std::make_tuple;
 using std::unique_ptr;
 using std::vector;
 
-namespace terrier {
+namespace noisepage {
 
 class BinderCorrectnessTest : public TerrierTest {
  protected:
@@ -92,7 +89,7 @@ class BinderCorrectnessTest : public TerrierTest {
   }
 
   void SetUp() override {
-    db_main_ = terrier::DBMain::Builder().SetUseGC(true).SetUseCatalog(true).Build();
+    db_main_ = noisepage::DBMain::Builder().SetUseGC(true).SetUseCatalog(true).Build();
     txn_manager_ = db_main_->GetTransactionLayer()->GetTransactionManager();
     catalog_ = db_main_->GetCatalogLayer()->GetCatalog();
 
@@ -937,7 +934,7 @@ TEST_F(BinderCorrectnessTest, SimpleFunctionCallTest) {
 
   auto fun_expr = select_stmt->GetSelectColumns()[0].CastManagedPointerTo<parser::FunctionExpression>();
   auto proc_oid = fun_expr->GetProcOid();
-  EXPECT_EQ(proc_oid, catalog::postgres::COT_PRO_OID);
+  EXPECT_EQ(proc_oid, accessor_->GetProcOid("cot", {accessor_->GetTypeOidFromTypeId(type::TypeId::REAL)}));
 
   // Make a query with wrong argument types to check correct overloading
   query = "SELECT cot(1.0, 2.0) FROM a;";
@@ -947,4 +944,72 @@ TEST_F(BinderCorrectnessTest, SimpleFunctionCallTest) {
   EXPECT_THROW(binder_->BindNameToNode(common::ManagedPointer(parse_tree), nullptr, nullptr), BinderException);
 }
 
-}  // namespace terrier
+// NOLINTNEXTLINE
+TEST_F(BinderCorrectnessTest, AnalyzeStatementSimpleTest) {
+  std::string analyze_sql = "ANALYZE a (a1);";
+
+  auto parse_tree = parser::PostgresParser::BuildParseTree(analyze_sql);
+  EXPECT_NO_THROW(binder_->BindNameToNode(common::ManagedPointer(parse_tree), nullptr, nullptr));
+
+  EXPECT_EQ(parse_tree->GetExpressions().size(), 0);
+  EXPECT_EQ(parse_tree->NumStatements(), 1);
+  auto statement = parse_tree->GetStatement(0);
+  EXPECT_EQ(statement->GetType(), parser::StatementType::ANALYZE);
+  auto analyze = statement.CastManagedPointerTo<parser::AnalyzeStatement>();
+  EXPECT_EQ(analyze->GetAnalyzeTable()->GetTableName(), "a");
+  EXPECT_EQ(analyze->GetColumns()->size(), 1);
+  EXPECT_EQ(analyze->GetColumns()->at(0), "a1");
+  EXPECT_EQ(analyze->GetDatabaseOid(), db_oid_);
+  EXPECT_EQ(analyze->GetTableOid(), table_a_oid_);
+  EXPECT_EQ(analyze->GetColumnOids().size(), 1);
+  EXPECT_EQ(analyze->GetColumnOids().at(0).UnderlyingValue(), 1);
+}
+
+// NOLINTNEXTLINE
+TEST_F(BinderCorrectnessTest, AnalyzeStatementSimpleNoColumnsTest) {
+  std::string analyze_sql = "ANALYZE a;";
+
+  auto parse_tree = parser::PostgresParser::BuildParseTree(analyze_sql);
+  EXPECT_NO_THROW(binder_->BindNameToNode(common::ManagedPointer(parse_tree), nullptr, nullptr));
+
+  EXPECT_EQ(parse_tree->GetExpressions().size(), 0);
+  EXPECT_EQ(parse_tree->NumStatements(), 1);
+  auto statement = parse_tree->GetStatement(0);
+  EXPECT_EQ(statement->GetType(), parser::StatementType::ANALYZE);
+  auto analyze = statement.CastManagedPointerTo<parser::AnalyzeStatement>();
+  EXPECT_EQ(analyze->GetAnalyzeTable()->GetTableName(), "a");
+  EXPECT_EQ(analyze->GetColumns()->size(), 2);
+  EXPECT_EQ(analyze->GetColumns()->at(0), "a1");
+  EXPECT_EQ(analyze->GetColumns()->at(1), "a2");
+  EXPECT_EQ(analyze->GetDatabaseOid(), db_oid_);
+  EXPECT_EQ(analyze->GetTableOid(), table_a_oid_);
+  EXPECT_EQ(analyze->GetColumnOids().size(), 2);
+  EXPECT_EQ(analyze->GetColumnOids().at(0).UnderlyingValue(), 1);
+  EXPECT_EQ(analyze->GetColumnOids().at(1).UnderlyingValue(), 2);
+}
+
+// NOLINTNEXTLINE
+TEST_F(BinderCorrectnessTest, AnalyzeStatementInvalidTableTest) {
+  std::string analyze_sql = "ANALYZE zz;";
+
+  auto parse_tree = parser::PostgresParser::BuildParseTree(analyze_sql);
+  EXPECT_THROW(binder_->BindNameToNode(common::ManagedPointer(parse_tree), nullptr, nullptr), BinderException);
+}
+
+// NOLINTNEXTLINE
+TEST_F(BinderCorrectnessTest, AnalyzeStatementInvalidColumnTest) {
+  std::string analyze_sql = "ANALYZE a (a99);";
+
+  auto parse_tree = parser::PostgresParser::BuildParseTree(analyze_sql);
+  EXPECT_THROW(binder_->BindNameToNode(common::ManagedPointer(parse_tree), nullptr, nullptr), BinderException);
+}
+
+// NOLINTNEXTLINE
+TEST_F(BinderCorrectnessTest, AnalyzeStatementNoTableTest) {
+  std::string select_sql = "ANALYZE;";
+
+  auto parse_tree = parser::PostgresParser::BuildParseTree(select_sql);
+  EXPECT_THROW(binder_->BindNameToNode(common::ManagedPointer(parse_tree), nullptr, nullptr), BinderException);
+}
+
+}  // namespace noisepage

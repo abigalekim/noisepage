@@ -26,7 +26,7 @@
 #include "type/type_id.h"
 #include "type/type_util.h"
 
-namespace terrier::storage::index {
+namespace noisepage::storage::index {
 
 class IndexKeyTests : public TerrierTest {
  public:
@@ -90,7 +90,7 @@ class IndexKeyTests : public TerrierTest {
         std::memcpy(reference, &bigint, type_size);
         break;
       }
-      case type::TypeId::DECIMAL: {
+      case type::TypeId::REAL: {
         auto decimal = static_cast<int64_t>(rng(*generator));
         std::memcpy(attr, &decimal, type_size);
         decimal ^= static_cast<int64_t>(static_cast<int64_t>(0x1) << (sizeof(int64_t) * 8UL - 1));
@@ -108,7 +108,7 @@ class IndexKeyTests : public TerrierTest {
       case type::TypeId::VARCHAR:
       case type::TypeId::VARBINARY: {
         // pick a random varlen size, meant to hit the {inline (prefix), inline (prefix+content), content} cases
-        auto varlen_size = col.MaxVarlenSize();
+        auto varlen_size = col.TypeModifier();
 
         // generate random varlen content
         auto *varlen_content = new byte[varlen_size];
@@ -123,7 +123,8 @@ class IndexKeyTests : public TerrierTest {
 
         // write the varlen content into a varlen entry, inlining if appropriate
         VarlenEntry varlen_entry{};
-        if (varlen_size <= VarlenEntry::InlineThreshold()) {
+        NOISEPAGE_ASSERT(varlen_size > 0, "Expecting this to be a positive integer.");
+        if (static_cast<uint32_t>(varlen_size) <= VarlenEntry::InlineThreshold()) {
           varlen_entry = VarlenEntry::CreateInline(varlen_content, varlen_size);
         } else {
           varlen_entry = VarlenEntry::Create(varlen_content, varlen_size, false);
@@ -438,7 +439,7 @@ TEST_F(IndexKeyTests, IndexMetadataCompactIntsKeyTest) {
   key_cols.emplace_back("", type::TypeId::SMALLINT, false, parser::ConstantValueExpression(type::TypeId::SMALLINT));
   StorageTestUtil::ForceOid(&(key_cols.back()), oid++);
 
-  IndexMetadata metadata(catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true));
+  IndexMetadata metadata(catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true));
 
   // identical key schema
   const auto &metadata_key_schema = metadata.GetSchema().GetColumns();
@@ -507,7 +508,7 @@ TEST_F(IndexKeyTests, IndexMetadataCompactIntsKeyTest) {
 // NOLINTNEXTLINE
 TEST_F(IndexKeyTests, IndexMetadataGenericKeyNoMustInlineVarlenTest) {
   // INPUT:
-  //    key_schema            {INTEGER, VARCHAR(8), VARCHAR(0), TINYINT, VARCHAR(12)}
+  //    key_schema            {INTEGER, VARCHAR(8), VARCHAR(1), TINYINT, VARCHAR(12)}
   //    oids                  {20, 21, 22, 23, 24}
   // EXPECT:
   //    identical key schema
@@ -526,14 +527,14 @@ TEST_F(IndexKeyTests, IndexMetadataGenericKeyNoMustInlineVarlenTest) {
   StorageTestUtil::ForceOid(&(key_cols.back()), oid++);
   key_cols.emplace_back("", type::TypeId::VARCHAR, 8, false, parser::ConstantValueExpression(type::TypeId::VARCHAR));
   StorageTestUtil::ForceOid(&(key_cols.back()), oid++);
-  key_cols.emplace_back("", type::TypeId::VARCHAR, 0, false, parser::ConstantValueExpression(type::TypeId::VARCHAR));
+  key_cols.emplace_back("", type::TypeId::VARCHAR, 1, false, parser::ConstantValueExpression(type::TypeId::VARCHAR));
   StorageTestUtil::ForceOid(&(key_cols.back()), oid++);
   key_cols.emplace_back("", type::TypeId::TINYINT, false, parser::ConstantValueExpression(type::TypeId::TINYINT));
   StorageTestUtil::ForceOid(&(key_cols.back()), oid++);
   key_cols.emplace_back("", type::TypeId::VARCHAR, 12, false, parser::ConstantValueExpression(type::TypeId::VARCHAR));
   StorageTestUtil::ForceOid(&(key_cols.back()), oid++);
 
-  IndexMetadata metadata(catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true));
+  IndexMetadata metadata(catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true));
 
   // identical key schema
   const auto &metadata_key_schema = metadata.GetSchema().GetColumns();
@@ -553,9 +554,9 @@ TEST_F(IndexKeyTests, IndexMetadataGenericKeyNoMustInlineVarlenTest) {
   EXPECT_FALSE(metadata_key_schema[2].Nullable());
   EXPECT_FALSE(metadata_key_schema[3].Nullable());
   EXPECT_FALSE(metadata_key_schema[4].Nullable());
-  EXPECT_EQ(metadata_key_schema[1].MaxVarlenSize(), 8);
-  EXPECT_EQ(metadata_key_schema[2].MaxVarlenSize(), 0);
-  EXPECT_EQ(metadata_key_schema[4].MaxVarlenSize(), 12);
+  EXPECT_EQ(metadata_key_schema[1].TypeModifier(), 8);
+  EXPECT_EQ(metadata_key_schema[2].TypeModifier(), 1);
+  EXPECT_EQ(metadata_key_schema[4].TypeModifier(), 12);
 
   // attr_sizes            {4, VARLEN_COLUMN, VARLEN_COLUMN, 1, VARLEN_COLUMN}
   const auto &attr_sizes = metadata.GetAttributeSizes();
@@ -623,7 +624,7 @@ TEST_F(IndexKeyTests, IndexMetadataGenericKeyMustInlineVarlenTest) {
   key_cols.emplace_back("", type::TypeId::VARCHAR, 90, false, parser::ConstantValueExpression(type::TypeId::VARCHAR));
   StorageTestUtil::ForceOid(&(key_cols.back()), oid++);
 
-  IndexMetadata metadata(catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, true, true, false, true));
+  IndexMetadata metadata(catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, true, true, false, true));
 
   // identical key schema
   const auto &metadata_key_schema = metadata.GetSchema().GetColumns();
@@ -643,9 +644,9 @@ TEST_F(IndexKeyTests, IndexMetadataGenericKeyMustInlineVarlenTest) {
   EXPECT_FALSE(metadata_key_schema[2].Nullable());
   EXPECT_FALSE(metadata_key_schema[3].Nullable());
   EXPECT_FALSE(metadata_key_schema[4].Nullable());
-  EXPECT_EQ(metadata_key_schema[1].MaxVarlenSize(), 50);
-  EXPECT_EQ(metadata_key_schema[2].MaxVarlenSize(), 8);
-  EXPECT_EQ(metadata_key_schema[4].MaxVarlenSize(), 90);
+  EXPECT_EQ(metadata_key_schema[1].TypeModifier(), 50);
+  EXPECT_EQ(metadata_key_schema[2].TypeModifier(), 8);
+  EXPECT_EQ(metadata_key_schema[4].TypeModifier(), 90);
 
   // attr_sizes            {4, VARLEN_COLUMN, VARLEN_COLUMN, 1, VARLEN_COLUMN}
   const auto &attr_sizes = metadata.GetAttributeSizes();
@@ -713,7 +714,7 @@ TEST_F(IndexKeyTests, RandomCompactIntsKeyTest) {
         break;
       }
     }
-    TERRIER_ASSERT(1 <= key_type && key_type <= 4, "CompactIntsKey only has 4 possible KeySizes.");
+    NOISEPAGE_ASSERT(1 <= key_type && key_type <= 4, "CompactIntsKey only has 4 possible KeySizes.");
 
     // create our projected row buffers
     auto *pr_buffer_a = common::AllocationUtil::AllocateAligned(initializer.ProjectedRowSize());
@@ -814,7 +815,7 @@ void CompactIntsKeyBasicTest(type::TypeId type_id, Random *const generator) {
     key_cols.emplace_back("", type_id, false, parser::ConstantValueExpression(type_id));
     StorageTestUtil::ForceOid(&(key_cols.back()), catalog::indexkeycol_oid_t(i));
   }
-  key_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, false, false, false, true);
+  key_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, false, false, false, true);
 
   const IndexMetadata metadata(key_schema);
   const auto &initializer = metadata.GetProjectedRowInitializer();
@@ -876,7 +877,7 @@ void NumericComparisons(const type::TypeId type_id, const bool nullable) {
   StorageTestUtil::ForceOid(&(key_cols.back()), catalog::indexkeycol_oid_t(0));
 
   const IndexMetadata metadata(
-      catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, false, false, false, true));
+      catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, false, false, false, true));
   const auto &initializer = metadata.GetProjectedRowInitializer();
 
   auto *const pr_buffer = common::AllocationUtil::AllocateAligned(initializer.ProjectedRowSize());
@@ -956,7 +957,7 @@ TEST_F(IndexKeyTests, GenericKeyNumericComparisons) {
   NumericComparisons<GenericKey<64>, int32_t>(type::TypeId::INTEGER, true);
   NumericComparisons<GenericKey<64>, uint32_t>(type::TypeId::DATE, true);
   NumericComparisons<GenericKey<64>, int64_t>(type::TypeId::BIGINT, true);
-  NumericComparisons<GenericKey<64>, double>(type::TypeId::DECIMAL, true);
+  NumericComparisons<GenericKey<64>, double>(type::TypeId::REAL, true);
   NumericComparisons<GenericKey<64>, uint64_t>(type::TypeId::TIMESTAMP, true);
 }
 
@@ -967,7 +968,7 @@ void UnorderedNumericComparisons(const type::TypeId type_id, const bool nullable
   StorageTestUtil::ForceOid(&(key_cols.back()), catalog::indexkeycol_oid_t(0));
 
   const IndexMetadata metadata(
-      catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, false, false, false, true));
+      catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, false, false, false, true));
   const auto &initializer = metadata.GetProjectedRowInitializer();
 
   auto *const pr_buffer = common::AllocationUtil::AllocateAligned(initializer.ProjectedRowSize());
@@ -1033,7 +1034,7 @@ TEST_F(IndexKeyTests, HashKeyNumericComparisons) {
   UnorderedNumericComparisons<HashKey<8>, int32_t>(type::TypeId::INTEGER, false);
   UnorderedNumericComparisons<HashKey<8>, uint32_t>(type::TypeId::DATE, false);
   UnorderedNumericComparisons<HashKey<8>, int64_t>(type::TypeId::BIGINT, false);
-  UnorderedNumericComparisons<HashKey<8>, double>(type::TypeId::DECIMAL, false);
+  UnorderedNumericComparisons<HashKey<8>, double>(type::TypeId::REAL, false);
   UnorderedNumericComparisons<HashKey<8>, uint64_t>(type::TypeId::TIMESTAMP, false);
 }
 
@@ -1044,7 +1045,7 @@ TEST_F(IndexKeyTests, GenericKeyInlineVarlenComparisons) {
   StorageTestUtil::ForceOid(&(key_cols.back()), catalog::indexkeycol_oid_t(0));
 
   const IndexMetadata metadata(
-      catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, false, false, false, true));
+      catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, false, false, false, true));
   const auto &initializer = metadata.GetProjectedRowInitializer();
 
   auto *const pr_buffer = common::AllocationUtil::AllocateAligned(initializer.ProjectedRowSize());
@@ -1152,7 +1153,7 @@ TEST_F(IndexKeyTests, GenericKeyNonInlineVarlenComparisons) {
   StorageTestUtil::ForceOid(&(key_cols.back()), catalog::indexkeycol_oid_t(0));
 
   const IndexMetadata metadata(
-      catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, false, false, false, true));
+      catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, false, false, false, true));
   const auto &initializer = metadata.GetProjectedRowInitializer();
 
   auto *const pr_buffer = common::AllocationUtil::AllocateAligned(initializer.ProjectedRowSize());
@@ -1219,7 +1220,7 @@ TEST_F(IndexKeyTests, GenericKeyBuilderTest) {
 
   const std::vector<type::TypeId> generic_key_types{
       type::TypeId::BOOLEAN, type::TypeId::TINYINT,  type::TypeId::SMALLINT,  type::TypeId::INTEGER,
-      type::TypeId::BIGINT,  type::TypeId::DECIMAL,  type::TypeId::TIMESTAMP, type::TypeId::DATE,
+      type::TypeId::BIGINT,  type::TypeId::REAL,     type::TypeId::TIMESTAMP, type::TypeId::DATE,
       type::TypeId::VARCHAR, type::TypeId::VARBINARY};
 
   for (uint32_t i = 0; i < num_iters; i++) {
@@ -1266,7 +1267,8 @@ TEST_F(IndexKeyTests, GenericKeyBuilderVarlenSizeEdgeCaseTest) {
   std::vector<catalog::IndexSchema::Column> key_cols;
   key_cols.emplace_back("", type::TypeId::VARCHAR, 64, false, parser::ConstantValueExpression(type::TypeId::VARCHAR));
   StorageTestUtil::ForceOid(&(key_cols.back()), catalog::indexkeycol_oid_t(15445));
-  const auto key_schema = catalog::IndexSchema(key_cols, storage::index::IndexType::BWTREE, false, false, false, true);
+  const auto key_schema =
+      catalog::IndexSchema(key_cols, storage::index::IndexType::BPLUSTREE, false, false, false, true);
 
   IndexBuilder builder;
   builder.SetKeySchema(key_schema);
@@ -1276,4 +1278,4 @@ TEST_F(IndexKeyTests, GenericKeyBuilderVarlenSizeEdgeCaseTest) {
   delete index;
 }
 
-}  // namespace terrier::storage::index
+}  // namespace noisepage::storage::index

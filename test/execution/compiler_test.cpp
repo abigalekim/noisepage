@@ -41,7 +41,7 @@
 #include "planner/plannodes/update_plan_node.h"
 #include "type/type_id.h"
 
-namespace terrier::execution::compiler::test {
+namespace noisepage::execution::compiler::test {
 class CompilerTest : public SqlBasedTest {
  public:
   void SetUp() override {
@@ -49,13 +49,13 @@ class CompilerTest : public SqlBasedTest {
     // Make the test tables
     auto exec_ctx = MakeExecCtx();
     sql::TableGenerator table_generator{exec_ctx.get(), BlockStore(), NSOid()};
-    table_generator.GenerateTestTables(false);
+    table_generator.GenerateTestTables();
   }
 
-  bool CheckFeatureVectorEquality(const std::vector<brain::ExecutionOperatingUnitFeature> &vec_a,
-                                  const std::vector<brain::ExecutionOperatingUnitType> &vec_b) {
-    std::unordered_set<brain::ExecutionOperatingUnitType> set_a;
-    std::unordered_set<brain::ExecutionOperatingUnitType> set_b;
+  bool CheckFeatureVectorEquality(const std::vector<selfdriving::ExecutionOperatingUnitFeature> &vec_a,
+                                  const std::vector<selfdriving::ExecutionOperatingUnitType> &vec_b) {
+    std::unordered_set<selfdriving::ExecutionOperatingUnitType> set_a;
+    std::unordered_set<selfdriving::ExecutionOperatingUnitType> set_b;
     for (const auto &e : vec_a) {
       set_a.insert(e.GetExecutionOperatingUnitType());
     }
@@ -179,7 +179,8 @@ TEST_F(CompilerTest, SimpleSeqScanTest) {
   OutputStore store{&multi_checker, seq_scan->GetOutputSchema().Get()};
   exec::OutputPrinter printer(seq_scan->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), seq_scan->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, seq_scan->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*seq_scan, exec_ctx->GetExecutionSettings(),
@@ -192,9 +193,9 @@ TEST_F(CompilerTest, SimpleSeqScanTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::SEQ_SCAN, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-      brain::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY, brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY, selfdriving::ExecutionOperatingUnitType::OUTPUT};
 
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec, exp_vec));
 }
@@ -263,7 +264,8 @@ TEST_F(CompilerTest, SimpleSeqScanNonVecFilterTest) {
   OutputStore store{&multi_checker, seq_scan->GetOutputSchema().Get()};
   exec::OutputPrinter printer(seq_scan->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), seq_scan->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, seq_scan->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*seq_scan, exec_ctx->GetExecutionSettings(),
@@ -276,9 +278,9 @@ TEST_F(CompilerTest, SimpleSeqScanNonVecFilterTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::SEQ_SCAN, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-      brain::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY, brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY, selfdriving::ExecutionOperatingUnitType::OUTPUT};
 
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec, exp_vec));
 }
@@ -340,7 +342,8 @@ TEST_F(CompilerTest, SimpleSeqScanWithProjectionTest) {
   OutputStore store{&multi_checker, proj->GetOutputSchema().Get()};
   exec::OutputPrinter printer(proj->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), proj->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, proj->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*proj, exec_ctx->GetExecutionSettings(),
@@ -353,9 +356,9 @@ TEST_F(CompilerTest, SimpleSeqScanWithProjectionTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::SEQ_SCAN, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-      brain::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY, brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY, selfdriving::ExecutionOperatingUnitType::OUTPUT};
 
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec, exp_vec));
 }
@@ -412,7 +415,8 @@ TEST_F(CompilerTest, SimpleSeqScanWithParamsTest) {
   OutputStore store{&multi_checker, seq_scan->GetOutputSchema().Get()};
   exec::OutputPrinter printer(seq_scan->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), seq_scan->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, seq_scan->GetOutputSchema().Get());
   std::vector<parser::ConstantValueExpression> params;
   params.emplace_back(type::TypeId::INTEGER, execution::sql::Integer(100));
   params.emplace_back(type::TypeId::INTEGER, execution::sql::Integer(500));
@@ -430,9 +434,9 @@ TEST_F(CompilerTest, SimpleSeqScanWithParamsTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::SEQ_SCAN, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-      brain::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY, brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY, selfdriving::ExecutionOperatingUnitType::OUTPUT};
 
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec, exp_vec));
 }
@@ -476,7 +480,8 @@ TEST_F(CompilerTest, SimpleIndexScanTest) {
   OutputStore store{&multi_checker, index_scan->GetOutputSchema().Get()};
   exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*index_scan, exec_ctx->GetExecutionSettings(),
@@ -489,8 +494,8 @@ TEST_F(CompilerTest, SimpleIndexScanTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::IDX_SCAN,
-                                                                brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec = std::vector<selfdriving::ExecutionOperatingUnitType>{selfdriving::ExecutionOperatingUnitType::IDX_SCAN,
+                                                                      selfdriving::ExecutionOperatingUnitType::OUTPUT};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec, exp_vec));
 }
 
@@ -556,7 +561,8 @@ TEST_F(CompilerTest, SimpleIndexScanAscendingTest) {
   OutputStore store{&checker, index_scan->GetOutputSchema().Get()};
   exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*index_scan, exec_ctx->GetExecutionSettings(),
@@ -569,8 +575,8 @@ TEST_F(CompilerTest, SimpleIndexScanAscendingTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::IDX_SCAN,
-                                                                brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec = std::vector<selfdriving::ExecutionOperatingUnitType>{selfdriving::ExecutionOperatingUnitType::IDX_SCAN,
+                                                                      selfdriving::ExecutionOperatingUnitType::OUTPUT};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec, exp_vec));
 }
 
@@ -635,7 +641,8 @@ TEST_F(CompilerTest, SimpleIndexScanLimitAscendingTest) {
   OutputStore store{&checker, index_scan->GetOutputSchema().Get()};
   exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*index_scan, exec_ctx->GetExecutionSettings(),
@@ -648,8 +655,8 @@ TEST_F(CompilerTest, SimpleIndexScanLimitAscendingTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::IDX_SCAN,
-                                                                brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec = std::vector<selfdriving::ExecutionOperatingUnitType>{selfdriving::ExecutionOperatingUnitType::IDX_SCAN,
+                                                                      selfdriving::ExecutionOperatingUnitType::OUTPUT};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec, exp_vec));
 }
 
@@ -714,7 +721,8 @@ TEST_F(CompilerTest, SimpleIndexScanDescendingTest) {
   OutputStore store{&checker, index_scan->GetOutputSchema().Get()};
   exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*index_scan, exec_ctx->GetExecutionSettings(),
@@ -727,8 +735,8 @@ TEST_F(CompilerTest, SimpleIndexScanDescendingTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::IDX_SCAN,
-                                                                brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec = std::vector<selfdriving::ExecutionOperatingUnitType>{selfdriving::ExecutionOperatingUnitType::IDX_SCAN,
+                                                                      selfdriving::ExecutionOperatingUnitType::OUTPUT};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec, exp_vec));
 }
 
@@ -793,7 +801,8 @@ TEST_F(CompilerTest, SimpleIndexScanLimitDescendingTest) {
   OutputStore store{&checker, index_scan->GetOutputSchema().Get()};
   exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*index_scan, exec_ctx->GetExecutionSettings(),
@@ -806,8 +815,8 @@ TEST_F(CompilerTest, SimpleIndexScanLimitDescendingTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::IDX_SCAN,
-                                                                brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec = std::vector<selfdriving::ExecutionOperatingUnitType>{selfdriving::ExecutionOperatingUnitType::IDX_SCAN,
+                                                                      selfdriving::ExecutionOperatingUnitType::OUTPUT};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec, exp_vec));
 }
 
@@ -877,7 +886,8 @@ TEST_F(CompilerTest, SimpleAggregateTest) {
   OutputStore store{&multi_checker, agg->GetOutputSchema().Get()};
   exec::OutputPrinter printer(agg->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), agg->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, agg->GetOutputSchema().Get());
 
   // Run & Check
   auto executable =
@@ -891,18 +901,18 @@ TEST_F(CompilerTest, SimpleAggregateTest) {
 
   auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
   auto feature_vec1 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(2));
-  auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::AGGREGATE_ITERATE,
-                                                                 brain::ExecutionOperatingUnitType::OUTPUT};
-  auto exp_vec1 = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::SEQ_SCAN, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-      brain::ExecutionOperatingUnitType::AGGREGATE_BUILD, brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS};
+  auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::AGGREGATE_ITERATE, selfdriving::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec1 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::AGGREGATE_BUILD,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec1, exp_vec1));
 }
 
 // NOLINTNEXTLINE
-TEST_F(CompilerTest, DISABLED_AggregateWithDistinctAndGroupByTest) {
-  // TODO(WAN): distinct doesn't work yet in TPL2
+TEST_F(CompilerTest, AggregateWithDistinctAndGroupByTest) {
   // SELECT col2, SUM(col1), COUNT(DISTINCT col2), SUM(DISTINCT col1) FROM test_1 WHERE col1 < 1000 GROUP BY col2;
   // Get accessor
   auto accessor = MakeAccessor();
@@ -983,7 +993,8 @@ TEST_F(CompilerTest, DISABLED_AggregateWithDistinctAndGroupByTest) {
   OutputStore store{&multi_checker, agg->GetOutputSchema().Get()};
   exec::OutputPrinter printer(agg->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), agg->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, agg->GetOutputSchema().Get());
 
   // Run & Check
   auto executable =
@@ -1043,7 +1054,8 @@ TEST_F(CompilerTest, CountStarTest) {
   OutputStore store{&multi_checker, agg->GetOutputSchema().Get()};
   exec::OutputPrinter printer(agg->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), agg->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, agg->GetOutputSchema().Get());
 
   // Run & Check
   auto executable =
@@ -1113,7 +1125,8 @@ TEST_F(CompilerTest, StaticAggregateTest) {
   OutputStore store{&multi_checker, agg->GetOutputSchema().Get()};
   exec::OutputPrinter printer(agg->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), agg->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, agg->GetOutputSchema().Get());
 
   // Run & Check
   auto executable =
@@ -1123,8 +1136,7 @@ TEST_F(CompilerTest, StaticAggregateTest) {
 }
 
 // NOLINTNEXTLINE
-TEST_F(CompilerTest, DISABLED_StaticDistinctAggregateTest) {
-  // TODO(WAN): distinct doesn't work yet in TPL2
+TEST_F(CompilerTest, StaticDistinctAggregateTest) {
   // SELECT COUNT(DISTINCT colb), SUM(DISTINCT colb), COUNT(*) FROM test_1;
   // Get accessor
   auto accessor = MakeAccessor();
@@ -1191,7 +1203,8 @@ TEST_F(CompilerTest, DISABLED_StaticDistinctAggregateTest) {
   OutputStore store{&multi_checker, agg->GetOutputSchema().Get()};
   exec::OutputPrinter printer(agg->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), agg->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, agg->GetOutputSchema().Get());
 
   // Run & Check
   auto executable =
@@ -1201,16 +1214,15 @@ TEST_F(CompilerTest, DISABLED_StaticDistinctAggregateTest) {
 
   // Pipeline Units
   auto pipeline = executable->GetPipelineOperatingUnits();
-  EXPECT_FALSE(true);
-  // TODO(WAN): re-enable when distinct works EXPECT_EQ(pipeline->units_.size(), 2);
+  EXPECT_EQ(pipeline->units_.size(), 2);
 
   auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
   auto feature_vec1 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(2));
-  auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::AGGREGATE_BUILD, brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
-      brain::ExecutionOperatingUnitType::SEQ_SCAN};
-  auto exp_vec1 = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::AGGREGATE_ITERATE,
-                                                                 brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::AGGREGATE_ITERATE, selfdriving::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec1 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::AGGREGATE_BUILD,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec1, exp_vec1));
 }
@@ -1294,7 +1306,8 @@ TEST_F(CompilerTest, SimpleAggregateHavingTest) {
   OutputStore store{&checker, agg->GetOutputSchema().Get()};
   exec::OutputPrinter printer(agg->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), agg->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, agg->GetOutputSchema().Get());
 
   // Run & Check
   auto executable =
@@ -1308,12 +1321,13 @@ TEST_F(CompilerTest, SimpleAggregateHavingTest) {
 
   auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
   auto feature_vec1 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(2));
-  auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::AGGREGATE_ITERATE,
-                                                                 brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-                                                                 brain::ExecutionOperatingUnitType::OUTPUT};
-  auto exp_vec1 = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::SEQ_SCAN, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-      brain::ExecutionOperatingUnitType::AGGREGATE_BUILD, brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS};
+  auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::AGGREGATE_ITERATE,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE, selfdriving::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec1 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::AGGREGATE_BUILD,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec1, exp_vec1));
 }
@@ -1369,7 +1383,8 @@ TEST_F(CompilerTest, StaticAggregateHavingTest) {
   OutputStore store{&multi_checker, agg->GetOutputSchema().Get()};
   exec::OutputPrinter printer(agg->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), agg->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, agg->GetOutputSchema().Get());
 
   // Run & Check
   auto executable =
@@ -1497,7 +1512,8 @@ TEST_F(CompilerTest, SimpleHashJoinTest) {
   OutputStore store{&checker, hash_join->GetOutputSchema().Get()};
   exec::OutputPrinter printer(hash_join->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), hash_join->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, hash_join->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*hash_join, exec_ctx->GetExecutionSettings(),
@@ -1511,13 +1527,13 @@ TEST_F(CompilerTest, SimpleHashJoinTest) {
 
   auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
   auto feature_vec1 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(2));
-  auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::SEQ_SCAN, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-      brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS, brain::ExecutionOperatingUnitType::HASHJOIN_PROBE,
-      brain::ExecutionOperatingUnitType::OUTPUT};
-  auto exp_vec1 = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::SEQ_SCAN,
-                                                                 brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-                                                                 brain::ExecutionOperatingUnitType::HASHJOIN_BUILD};
+  auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
+      selfdriving::ExecutionOperatingUnitType::HASHJOIN_PROBE, selfdriving::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec1 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::HASHJOIN_BUILD};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec1, exp_vec1));
 }
@@ -1679,7 +1695,8 @@ TEST_F(CompilerTest, MultiWayHashJoinTest) {
   OutputStore store{&checker, hash_join2->GetOutputSchema().Get()};
   exec::OutputPrinter printer(hash_join2->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), hash_join2->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, hash_join2->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*hash_join2, exec_ctx->GetExecutionSettings(),
@@ -1694,20 +1711,20 @@ TEST_F(CompilerTest, MultiWayHashJoinTest) {
   auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
   auto feature_vec1 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(2));
   auto feature_vec2 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(3));
-  auto exp_vec0 =
-      std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::SEQ_SCAN,
-                                                     brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-                                                     brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
-                                                     brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
-                                                     brain::ExecutionOperatingUnitType::HASHJOIN_PROBE,
-                                                     brain::ExecutionOperatingUnitType::HASHJOIN_PROBE,
-                                                     brain::ExecutionOperatingUnitType::OUTPUT};
-  auto exp_vec1 = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::SEQ_SCAN,
-                                                                 brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-                                                                 brain::ExecutionOperatingUnitType::HASHJOIN_BUILD};
-  auto exp_vec2 = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::SEQ_SCAN,
-                                                                 brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-                                                                 brain::ExecutionOperatingUnitType::HASHJOIN_BUILD};
+  auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
+      selfdriving::ExecutionOperatingUnitType::HASHJOIN_PROBE,
+      selfdriving::ExecutionOperatingUnitType::HASHJOIN_PROBE,
+      selfdriving::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec1 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::HASHJOIN_BUILD};
+  auto exp_vec2 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::HASHJOIN_BUILD};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec1, exp_vec1));
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec2, exp_vec2));
@@ -1803,7 +1820,8 @@ TEST_F(CompilerTest, SimpleSortTest) {
   OutputStore store{&checker, order_by->GetOutputSchema().Get()};
   exec::OutputPrinter printer(order_by->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), order_by->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, order_by->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*order_by, exec_ctx->GetExecutionSettings(),
@@ -1817,12 +1835,14 @@ TEST_F(CompilerTest, SimpleSortTest) {
 
   auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
   auto feature_vec1 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(2));
-  auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::SORT_ITERATE, brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
-      brain::ExecutionOperatingUnitType::OUTPUT};
-  auto exp_vec1 = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::SEQ_SCAN, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-      brain::ExecutionOperatingUnitType::SORT_BUILD, brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS};
+  auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SORT_ITERATE,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
+      selfdriving::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec1 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::SORT_BUILD,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec1, exp_vec1));
 }
@@ -1918,7 +1938,8 @@ TEST_F(CompilerTest, SortWithLimitTest) {
   OutputStore store{&checker, order_by->GetOutputSchema().Get()};
   exec::OutputPrinter printer(order_by->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), order_by->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, order_by->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*order_by, exec_ctx->GetExecutionSettings(),
@@ -2007,7 +2028,8 @@ TEST_F(CompilerTest, SortWithLimitAndOffsetTest) {
   OutputStore store{&checker, order_by->GetOutputSchema().Get()};
   exec::OutputPrinter printer(order_by->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), order_by->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, order_by->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*order_by, exec_ctx->GetExecutionSettings(),
@@ -2090,7 +2112,8 @@ TEST_F(CompilerTest, LimitAndOffsetTest) {
   OutputStore store{&checker, limit->GetOutputSchema().Get()};
   exec::OutputPrinter printer(limit->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), limit->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, limit->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*limit, exec_ctx->GetExecutionSettings(),
@@ -2216,7 +2239,8 @@ TEST_F(CompilerTest, SimpleNestedLoopJoinTest) {
   OutputStore store{&checker, nl_join->GetOutputSchema().Get()};
   exec::OutputPrinter printer(nl_join->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), nl_join->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, nl_join->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*nl_join, exec_ctx->GetExecutionSettings(),
@@ -2231,13 +2255,13 @@ TEST_F(CompilerTest, SimpleNestedLoopJoinTest) {
   // NLJOIN left and right are in same pipeline
   // But NLJOIN left/right features do not exist
   auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec0 =
-      std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::SEQ_SCAN,
-                                                     brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-                                                     brain::ExecutionOperatingUnitType::SEQ_SCAN,
-                                                     brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
-                                                     brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-                                                     brain::ExecutionOperatingUnitType::OUTPUT};
+  auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::OUTPUT};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
 }
 
@@ -2341,7 +2365,8 @@ TEST_F(CompilerTest, SimpleIndexNestedLoopJoinTest) {
   OutputStore store{&checker, index_join->GetOutputSchema().Get()};
   exec::OutputPrinter printer(index_join->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), index_join->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, index_join->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*index_join, exec_ctx->GetExecutionSettings(),
@@ -2354,10 +2379,10 @@ TEST_F(CompilerTest, SimpleIndexNestedLoopJoinTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::OUTPUT, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-      brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS, brain::ExecutionOperatingUnitType::IDX_SCAN,
-      brain::ExecutionOperatingUnitType::SEQ_SCAN};
+  auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::OUTPUT, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
+      selfdriving::ExecutionOperatingUnitType::IDX_SCAN, selfdriving::ExecutionOperatingUnitType::SEQ_SCAN};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
 }
 
@@ -2456,7 +2481,8 @@ TEST_F(CompilerTest, SimpleIndexNestedLoopJoinMultiColumnTest) {
   OutputStore store{&checker, index_join->GetOutputSchema().Get()};
   exec::OutputPrinter printer(index_join->GetOutputSchema().Get());
   MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-  auto exec_ctx = MakeExecCtx(std::move(callback), index_join->GetOutputSchema().Get());
+  exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+  auto exec_ctx = MakeExecCtx(&callback_fn, index_join->GetOutputSchema().Get());
 
   // Run & Check
   auto executable = execution::compiler::CompilationContext::Compile(*index_join, exec_ctx->GetExecutionSettings(),
@@ -2469,9 +2495,10 @@ TEST_F(CompilerTest, SimpleIndexNestedLoopJoinMultiColumnTest) {
   EXPECT_EQ(pipeline->units_.size(), 1);
 
   auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-  auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{
-      brain::ExecutionOperatingUnitType::OUTPUT, brain::ExecutionOperatingUnitType::IDX_SCAN,
-      brain::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS, brain::ExecutionOperatingUnitType::SEQ_SCAN};
+  auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+      selfdriving::ExecutionOperatingUnitType::OUTPUT, selfdriving::ExecutionOperatingUnitType::IDX_SCAN,
+      selfdriving::ExecutionOperatingUnitType::OP_INTEGER_PLUS_OR_MINUS,
+      selfdriving::ExecutionOperatingUnitType::SEQ_SCAN};
   EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
 }
 
@@ -2517,7 +2544,8 @@ TEST_F(CompilerTest, SimpleDeleteTest) {
   {
     // Make Exec Ctx
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), delete_node->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, delete_node->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*delete_node, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -2527,9 +2555,9 @@ TEST_F(CompilerTest, SimpleDeleteTest) {
     EXPECT_EQ(pipeline->units_.size(), 1);
 
     auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-    auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{
-        brain::ExecutionOperatingUnitType::DELETE, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-        brain::ExecutionOperatingUnitType::SEQ_SCAN};
+    auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+        selfdriving::ExecutionOperatingUnitType::DELETE, selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+        selfdriving::ExecutionOperatingUnitType::SEQ_SCAN};
     EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   }
 
@@ -2562,7 +2590,8 @@ TEST_F(CompilerTest, SimpleDeleteTest) {
     OutputStore store{&checker, seq_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(seq_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), seq_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, seq_scan->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*seq_scan, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -2597,7 +2626,8 @@ TEST_F(CompilerTest, SimpleDeleteTest) {
     OutputStore store{&checker, index_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*index_scan, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -2658,6 +2688,7 @@ TEST_F(CompilerTest, SimpleUpdateTest) {
     planner::SetClause clause3{table_schema1.GetColumn("colC").Oid(), col3};
     planner::SetClause clause4{table_schema1.GetColumn("colD").Oid(), col4};
 
+    std::vector<catalog::index_oid_t> indexes = accessor->GetIndexOids(table_oid1);
     update_node = builder.SetTableOid(table_oid1)
                       .AddChild(std::move(seq_scan1))
                       .AddSetClause(clause1)
@@ -2665,13 +2696,15 @@ TEST_F(CompilerTest, SimpleUpdateTest) {
                       .AddSetClause(clause3)
                       .AddSetClause(clause4)
                       .SetIndexedUpdate(true)
+                      .SetIndexOids(std::move(indexes))
                       .Build();
   }
   // Execute update
   {
     // Make Exec Ctx
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), update_node->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, update_node->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*update_node, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -2681,9 +2714,14 @@ TEST_F(CompilerTest, SimpleUpdateTest) {
     EXPECT_EQ(pipeline->units_.size(), 1);
 
     auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-    auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{
-        brain::ExecutionOperatingUnitType::UPDATE, brain::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY,
-        brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE, brain::ExecutionOperatingUnitType::SEQ_SCAN};
+    auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+        selfdriving::ExecutionOperatingUnitType::INSERT,
+        selfdriving::ExecutionOperatingUnitType::DELETE,
+        selfdriving::ExecutionOperatingUnitType::INDEX_INSERT,
+        selfdriving::ExecutionOperatingUnitType::INDEX_DELETE,
+        selfdriving::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY,
+        selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+        selfdriving::ExecutionOperatingUnitType::SEQ_SCAN};
     EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   }
 
@@ -2740,7 +2778,8 @@ TEST_F(CompilerTest, SimpleUpdateTest) {
     OutputStore store{&checker, seq_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(seq_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), seq_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, seq_scan->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*seq_scan, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -2782,7 +2821,8 @@ TEST_F(CompilerTest, SimpleUpdateTest) {
     OutputStore store{&checker, index_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*index_scan, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -2827,6 +2867,7 @@ TEST_F(CompilerTest, SimpleInsertTest) {
                  .AddValues(std::move(values1))
                  .AddValues(std::move(values2))
                  .SetTableOid(table_oid1)
+                 .SetInsertType(parser::InsertType::VALUES)
                  .SetOutputSchema(std::move(output_schema))
                  .Build();
   }
@@ -2834,7 +2875,8 @@ TEST_F(CompilerTest, SimpleInsertTest) {
   {
     // Make Exec Ctx
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), insert->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, insert->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*insert, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -2844,7 +2886,8 @@ TEST_F(CompilerTest, SimpleInsertTest) {
     EXPECT_EQ(pipeline->units_.size(), 1);
 
     auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-    auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::INSERT};
+    auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+        selfdriving::ExecutionOperatingUnitType::INSERT, selfdriving::ExecutionOperatingUnitType::INDEX_INSERT};
     EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   }
 
@@ -2907,7 +2950,8 @@ TEST_F(CompilerTest, SimpleInsertTest) {
     OutputStore store{&checker, seq_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(seq_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), seq_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, seq_scan->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*seq_scan, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -2954,7 +2998,8 @@ TEST_F(CompilerTest, SimpleInsertTest) {
     OutputStore store{&checker, index_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*index_scan, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -2963,8 +3008,7 @@ TEST_F(CompilerTest, SimpleInsertTest) {
 }
 
 // NOLINTNEXTLINE
-TEST_F(CompilerTest, DISABLED_InsertIntoSelectWithParamTest) {
-  // TODO(WAN): insert into select doesn't work yet in TPL2
+TEST_F(CompilerTest, InsertIntoSelectWithParamTest) {
   // INSERT INTO test_1
   // SELECT -colA, col2, col3, col4 FROM test_1 WHERE colA BETWEEN param1 AND param2.
   // Set param1 = 495 and param2 = 505
@@ -3018,6 +3062,7 @@ TEST_F(CompilerTest, DISABLED_InsertIntoSelectWithParamTest) {
                  .AddParameterInfo(table_schema1.GetColumn("colD").Oid())
                  .SetIndexOids({index_oid1})
                  .SetTableOid(table_oid1)
+                 .SetInsertType(parser::InsertType::SELECT)
                  .AddChild(std::move(seq_scan1))
                  .SetOutputSchema(std::move(output_schema))
                  .Build();
@@ -3027,7 +3072,8 @@ TEST_F(CompilerTest, DISABLED_InsertIntoSelectWithParamTest) {
   {
     // Make Exec Ctx
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), insert->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, insert->GetOutputSchema().Get());
     std::vector<parser::ConstantValueExpression> params;
     params.emplace_back(type::TypeId::INTEGER, execution::sql::Integer(495));
     params.emplace_back(type::TypeId::INTEGER, execution::sql::Integer(505));
@@ -3037,15 +3083,16 @@ TEST_F(CompilerTest, DISABLED_InsertIntoSelectWithParamTest) {
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
 
     // Pipeline Units
-    auto pipeline = executable->GetPipelineOperatingUnits();
-    EXPECT_FALSE(true);
+    /*auto pipeline = executable->GetPipelineOperatingUnits();
     // TODO(WAN): re-enable when distinct works EXPECT_EQ(pipeline->units_.size(), 1);
 
-    auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-    auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{
-        brain::ExecutionOperatingUnitType::INSERT, brain::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
-        brain::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY, brain::ExecutionOperatingUnitType::SEQ_SCAN};
-    EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
+        auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
+        auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+            selfdriving::ExecutionOperatingUnitType::INSERT,
+       selfdriving::ExecutionOperatingUnitType::OP_INTEGER_COMPARE,
+            selfdriving::ExecutionOperatingUnitType::OP_INTEGER_MULTIPLY,
+            selfdriving::ExecutionOperatingUnitType::SEQ_SCAN};
+        EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));*/
   }
 
   // Now scan through table to check content.
@@ -3105,7 +3152,8 @@ TEST_F(CompilerTest, DISABLED_InsertIntoSelectWithParamTest) {
     OutputStore store{&checker, seq_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(seq_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), seq_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, seq_scan->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*seq_scan, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -3151,7 +3199,8 @@ TEST_F(CompilerTest, DISABLED_InsertIntoSelectWithParamTest) {
     OutputStore store{&checker, index_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*index_scan, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -3207,7 +3256,7 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
     int param_idx = 0;
     values1.push_back(expr_maker.PVE(type::TypeId::VARCHAR, param_idx++));
     values1.push_back(expr_maker.PVE(type::TypeId::DATE, param_idx++));
-    values1.push_back(expr_maker.PVE(type::TypeId::DECIMAL, param_idx++));
+    values1.push_back(expr_maker.PVE(type::TypeId::REAL, param_idx++));
     values1.push_back(expr_maker.PVE(type::TypeId::BOOLEAN, param_idx++));
     values1.push_back(expr_maker.PVE(type::TypeId::TINYINT, param_idx++));
     values1.push_back(expr_maker.PVE(type::TypeId::SMALLINT, param_idx++));
@@ -3216,7 +3265,7 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
 
     values2.push_back(expr_maker.PVE(type::TypeId::VARCHAR, param_idx++));
     values2.push_back(expr_maker.PVE(type::TypeId::DATE, param_idx++));
-    values2.push_back(expr_maker.PVE(type::TypeId::DECIMAL, param_idx++));
+    values2.push_back(expr_maker.PVE(type::TypeId::REAL, param_idx++));
     values2.push_back(expr_maker.PVE(type::TypeId::BOOLEAN, param_idx++));
     values2.push_back(expr_maker.PVE(type::TypeId::TINYINT, param_idx++));
     values2.push_back(expr_maker.PVE(type::TypeId::SMALLINT, param_idx++));
@@ -3238,6 +3287,7 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
                  .AddValues(std::move(values1))
                  .AddValues(std::move(values2))
                  .SetTableOid(table_oid1)
+                 .SetInsertType(parser::InsertType::VALUES)
                  .SetOutputSchema(std::move(output_schema))
                  .Build();
   }
@@ -3245,13 +3295,14 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
   {
     // Make Exec Ctx
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), insert->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, insert->GetOutputSchema().Get());
     std::vector<parser::ConstantValueExpression> params;
     // First parameter list
     auto str1_val = sql::ValueUtil::CreateStringVal(str1);
     params.emplace_back(type::TypeId::VARCHAR, str1_val.first, std::move(str1_val.second));
     params.emplace_back(type::TypeId::DATE, sql::DateVal(date1.val_));
-    params.emplace_back(type::TypeId::DECIMAL, sql::Real(real1));
+    params.emplace_back(type::TypeId::REAL, sql::Real(real1));
     params.emplace_back(type::TypeId::BOOLEAN, sql::BoolVal(bool1));
     params.emplace_back(type::TypeId::TINYINT, sql::Integer(tinyint1));
     params.emplace_back(type::TypeId::SMALLINT, sql::Integer(smallint1));
@@ -3261,7 +3312,7 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
     auto str2_val = sql::ValueUtil::CreateStringVal(str2);
     params.emplace_back(type::TypeId::VARCHAR, str2_val.first, std::move(str2_val.second));
     params.emplace_back(type::TypeId::DATE, sql::DateVal(date2.val_));
-    params.emplace_back(type::TypeId::DECIMAL, sql::Real(real2));
+    params.emplace_back(type::TypeId::REAL, sql::Real(real2));
     params.emplace_back(type::TypeId::BOOLEAN, sql::BoolVal(bool2));
     params.emplace_back(type::TypeId::TINYINT, sql::Integer(tinyint2));
     params.emplace_back(type::TypeId::SMALLINT, sql::Integer(smallint2));
@@ -3277,7 +3328,8 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
     EXPECT_EQ(pipeline->units_.size(), 1);
 
     auto feature_vec0 = pipeline->GetPipelineFeatures(execution::pipeline_id_t(1));
-    auto exp_vec0 = std::vector<brain::ExecutionOperatingUnitType>{brain::ExecutionOperatingUnitType::INSERT};
+    auto exp_vec0 = std::vector<selfdriving::ExecutionOperatingUnitType>{
+        selfdriving::ExecutionOperatingUnitType::INSERT, selfdriving::ExecutionOperatingUnitType::INDEX_INSERT};
     EXPECT_TRUE(CheckFeatureVectorEquality(feature_vec0, exp_vec0));
   }
 
@@ -3297,7 +3349,7 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
     // Get Table columns
     auto col1 = expr_maker.CVE(col1_oid, type::TypeId::VARCHAR);
     auto col2 = expr_maker.CVE(col2_oid, type::TypeId::DATE);
-    auto col3 = expr_maker.CVE(col3_oid, type::TypeId::DECIMAL);
+    auto col3 = expr_maker.CVE(col3_oid, type::TypeId::REAL);
     auto col4 = expr_maker.CVE(col4_oid, type::TypeId::BOOLEAN);
     auto col5 = expr_maker.CVE(col5_oid, type::TypeId::TINYINT);
     auto col6 = expr_maker.CVE(col6_oid, type::TypeId::SMALLINT);
@@ -3382,7 +3434,8 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
     OutputStore store{&checker, seq_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(seq_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), seq_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, seq_scan->GetOutputSchema().Get());
     auto executable = execution::compiler::CompilationContext::Compile(*seq_scan, exec_ctx->GetExecutionSettings(),
                                                                        exec_ctx->GetAccessor());
     executable->Run(common::ManagedPointer(exec_ctx), MODE);
@@ -3406,7 +3459,7 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
     // Get Table columns
     auto col1 = expr_maker.CVE(col1_oid, type::TypeId::VARCHAR);
     auto col2 = expr_maker.CVE(col2_oid, type::TypeId::DATE);
-    auto col3 = expr_maker.CVE(col3_oid, type::TypeId::DECIMAL);
+    auto col3 = expr_maker.CVE(col3_oid, type::TypeId::REAL);
     auto col4 = expr_maker.CVE(col4_oid, type::TypeId::BOOLEAN);
     auto col5 = expr_maker.CVE(col5_oid, type::TypeId::TINYINT);
     auto col6 = expr_maker.CVE(col6_oid, type::TypeId::SMALLINT);
@@ -3443,7 +3496,8 @@ TEST_F(CompilerTest, SimpleInsertWithParamsTest) {
     OutputStore store{&checker, index_scan->GetOutputSchema().Get()};
     exec::OutputPrinter printer(index_scan->GetOutputSchema().Get());
     MultiOutputCallback callback{std::vector<exec::OutputCallback>{store, printer}};
-    auto exec_ctx = MakeExecCtx(std::move(callback), index_scan->GetOutputSchema().Get());
+    exec::OutputCallback callback_fn = callback.ConstructOutputCallback();
+    auto exec_ctx = MakeExecCtx(&callback_fn, index_scan->GetOutputSchema().Get());
     std::vector<parser::ConstantValueExpression> params;
     auto str1_val = sql::ValueUtil::CreateStringVal(str1);
     auto str2_val = sql::ValueUtil::CreateStringVal(str2);
@@ -3475,13 +3529,13 @@ TEST_F(CompilerTest, TPCHQ1Test) {
   OutputSchemaHelper seq_scan_out{0, &expr_maker};
   {
     // Read all needed columns
-    auto l_returnflag = expr_maker.TVE(0, catalog_table->ColNumToOffset(8), terrier::type::TypeId::VARCHAR);
-    auto l_linestatus = expr_maker.TVE(0, catalog_table->ColNumToOffset(9), terrier::type::TypeId::VARCHAR);
-    auto l_extendedprice = expr_maker.TVE(0, catalog_table->ColNumToOffset(5), terrier::type::TypeId::DECIMAL);
-    auto l_discount = expr_maker.TVE(0, catalog_table->ColNumToOffset(6), terrier::type::TypeId::DECIMAL);
-    auto l_tax = expr_maker.TVE(0, catalog_table->ColNumToOffset(7), terrier::type::TypeId::DECIMAL);
-    auto l_quantity = expr_maker.TVE(0, catalog_table->ColNumToOffset(4), terrier::type::TypeId::DECIMAL);
-    auto l_shipdate = expr_maker.TVE(0, catalog_table->ColNumToOffset(10), terrier::type::TypeId::DATE);
+    auto l_returnflag = expr_maker.TVE(0, catalog_table->ColNumToOffset(8), noisepage::type::TypeId::VARCHAR);
+    auto l_linestatus = expr_maker.TVE(0, catalog_table->ColNumToOffset(9), noisepage::type::TypeId::VARCHAR);
+    auto l_extendedprice = expr_maker.TVE(0, catalog_table->ColNumToOffset(5), noisepage::type::TypeId::REAL);
+    auto l_discount = expr_maker.TVE(0, catalog_table->ColNumToOffset(6), noisepage::type::TypeId::REAL);
+    auto l_tax = expr_maker.TVE(0, catalog_table->ColNumToOffset(7), noisepage::type::TypeId::REAL);
+    auto l_quantity = expr_maker.TVE(0, catalog_table->ColNumToOffset(4), noisepage::type::TypeId::REAL);
+    auto l_shipdate = expr_maker.TVE(0, catalog_table->ColNumToOffset(10), noisepage::type::TypeId::DATE);
     // Make the output schema
     seq_scan_out.AddOutput("l_returnflag", l_returnflag);
     seq_scan_out.AddOutput("l_linestatus", l_linestatus);
@@ -3591,12 +3645,4 @@ TEST_F(CompilerTest, TPCHQ1Test) {
   executable->Run(common::ManagedPointer(exec_ctx), MODE); checker.CheckCorrectness();
 }
 */
-}  // namespace terrier::execution::compiler::test
-
-int main(int argc, char **argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  terrier::execution::ExecutionUtil::InitTPL();
-  int ret = RUN_ALL_TESTS();
-  terrier::execution::ExecutionUtil::ShutdownTPL();
-  return ret;
-}
+}  // namespace noisepage::execution::compiler::test

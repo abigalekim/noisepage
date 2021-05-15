@@ -24,7 +24,7 @@
 #include "parser/statements.h"
 #include "planner/plannodes/plan_node_defs.h"
 
-namespace terrier::optimizer {
+namespace noisepage::optimizer {
 
 QueryToOperatorTransformer::QueryToOperatorTransformer(
     const common::ManagedPointer<catalog::CatalogAccessor> catalog_accessor, const catalog::db_oid_t db_oid)
@@ -256,7 +256,7 @@ void QueryToOperatorTransformer::Visit(common::ManagedPointer<parser::TableRef> 
                                          std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, txn_context);
       join_expr->PushChild(std::move(prev_expr));
       join_expr->PushChild(std::move(output_expr_));
-      TERRIER_ASSERT(join_expr->GetChildren().size() == 2, "The join expr should have exactly 2 elements");
+      NOISEPAGE_ASSERT(join_expr->GetChildren().size() == 2, "The join expr should have exactly 2 elements");
       prev_expr = std::move(join_expr);
     }
     output_expr_ = std::move(prev_expr);
@@ -387,84 +387,57 @@ void QueryToOperatorTransformer::Visit(common::ManagedPointer<parser::InsertStat
   auto target_table_id = accessor_->GetTableOid(target_table->GetTableName());
   auto target_db_id = db_oid_;
   transaction::TransactionContext *txn_context = accessor_->GetTxn().Get();
+  bool is_select_insert = op->GetInsertType() == parser::InsertType::SELECT;
 
-  if (op->GetInsertType() == parser::InsertType::SELECT) {
-    auto insert_expr = std::make_unique<OperatorNode>(
-        LogicalInsertSelect::Make(target_db_id, target_table_id).RegisterWithTxnContext(txn_context),
-        std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, txn_context);
-    op->GetSelect()->Accept(common::ManagedPointer(this).CastManagedPointerTo<SqlNodeVisitor>());
-
-    insert_expr->PushChild(std::move(output_expr_));
-    output_expr_ = std::move(insert_expr);
-    return;
+  if (is_select_insert) {
+    ValidateInsertValues(op, op->GetSelect()->GetSelectColumns(), target_table_id);
+  } else {
+    for (const auto &values : *(op->GetValues())) {
+      ValidateInsertValues(op, values, target_table_id);
+    }
   }
-
-  // column_objects represents the columns for the current table as defined in its schema
-  auto column_objects = accessor_->GetSchema(target_table_id).GetColumns();
 
   // vector of column oids
   std::vector<catalog::col_oid_t> col_ids;
 
-  // INSERT INTO table_name VALUES (val1, val2, ...), (val_a, val_b, ...), ...
-  if (op->GetInsertColumns()->empty()) {
-    for (const auto &values : *(op->GetValues())) {
-      if (values.size() > column_objects.size()) {
-        throw CATALOG_EXCEPTION("INSERT has more expressions than target columns");
-      }
-      if (values.size() < column_objects.size()) {
-        for (auto i = values.size(); i != column_objects.size(); ++i) {
-          // check whether null values or default values can be used in the rest of the columns
-          if (!column_objects[i].Nullable() && column_objects[i].StoredExpression() == nullptr) {
-            throw CATALOG_EXCEPTION(
-                ("Null value in column \"" + column_objects[i].Name() + "\" violates not-null constraint").c_str());
-          }
-        }
-      }
-    }
-    for (const auto &col : column_objects) col_ids.push_back(col.Oid());
+  // The set below contains names of columns mentioned in the insert statement
+  std::unordered_set<catalog::col_oid_t> specified;
+  auto schema = accessor_->GetSchema(target_table_id);
 
-  } else {
-    // INSERT INTO table_name (col1, col2, ...) VALUES (val1, val2, ...), ...
-    auto num_columns = op->GetInsertColumns()->size();
-    for (const auto &tuple : *(op->GetValues())) {  // check size of each tuple
-      if (tuple.size() > num_columns) {
-        throw CATALOG_EXCEPTION("INSERT has more expressions than target columns");
-      }
-      if (tuple.size() < num_columns) {
-        throw CATALOG_EXCEPTION("INSERT has more target columns than expressions");
-      }
-    }
-
-    // The set below contains names of columns mentioned in the insert statement
-    std::unordered_set<catalog::col_oid_t> specified;
-    auto schema = accessor_->GetSchema(target_table_id);
-
-    for (const auto &col : *(op->GetInsertColumns())) {
-      try {
-        const auto &column_object = schema.GetColumn(col);
-        specified.insert(column_object.Oid());
-        col_ids.emplace_back(column_object.Oid());
-      } catch (const std::out_of_range &oor) {
-        throw CATALOG_EXCEPTION(
-            ("Column \"" + col + "\" of relation \"" + target_table->GetTableName() + "\" does not exist").c_str());
-      }
-    }
-
-    for (const auto &column : schema.GetColumns()) {
-      // this loop checks not null constraint for unspecified columns
-      if (specified.find(column.Oid()) == specified.end() && !column.Nullable() &&
-          column.StoredExpression() == nullptr) {
-        throw CATALOG_EXCEPTION(
-            ("Null value in column \"" + column.Name() + "\" violates not-null constraint").c_str());
-      }
+  for (const auto &col : *(op->GetInsertColumns())) {
+    try {
+      const auto &column_object = schema.GetColumn(col);
+      specified.insert(column_object.Oid());
+      col_ids.emplace_back(column_object.Oid());
+    } catch (const std::out_of_range &oor) {
+      throw CATALOG_EXCEPTION(
+          ("Column \"" + col + "\" of relation \"" + target_table->GetTableName() + "\" does not exist").c_str());
     }
   }
 
-  auto insert_expr = std::make_unique<OperatorNode>(
-      LogicalInsert::Make(target_db_id, target_table_id, std::move(col_ids), op->GetValues())
-          .RegisterWithTxnContext(txn_context),
-      std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, txn_context);
-  output_expr_ = std::move(insert_expr);
+  for (const auto &column : schema.GetColumns()) {
+    // this loop checks not null constraint for unspecified columns
+    if (specified.find(column.Oid()) == specified.end() && !column.Nullable() && column.StoredExpression() == nullptr) {
+      throw CATALOG_EXCEPTION(("Null value in column \"" + column.Name() + "\" violates not-null constraint").c_str());
+    }
+  }
+
+  if (is_select_insert) {
+    auto insert_expr =
+        std::make_unique<OperatorNode>(LogicalInsertSelect::Make(target_db_id, target_table_id, std::move(col_ids))
+                                           .RegisterWithTxnContext(txn_context),
+                                       std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, txn_context);
+    op->GetSelect()->Accept(common::ManagedPointer(this).CastManagedPointerTo<SqlNodeVisitor>());
+
+    insert_expr->PushChild(std::move(output_expr_));
+    output_expr_ = std::move(insert_expr);
+  } else {
+    auto insert_expr = std::make_unique<OperatorNode>(
+        LogicalInsert::Make(target_db_id, target_table_id, std::move(col_ids), op->GetValues())
+            .RegisterWithTxnContext(txn_context),
+        std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, txn_context);
+    output_expr_ = std::move(insert_expr);
+  }
 }
 
 void QueryToOperatorTransformer::Visit(common::ManagedPointer<parser::DeleteStatement> op) {
@@ -500,13 +473,12 @@ void QueryToOperatorTransformer::Visit(common::ManagedPointer<parser::DeleteStat
 }
 
 void QueryToOperatorTransformer::Visit(common::ManagedPointer<parser::DropStatement> op) {
-  OPTIMIZER_LOG_DEBUG("Transforming DropStatement to operators ...")
+  OPTIMIZER_LOG_DEBUG("Transforming DropStatement to operators ...");
   auto drop_type = op->GetDropType();
   transaction::TransactionContext *txn_context = accessor_->GetTxn().Get();
   std::unique_ptr<OperatorNode> drop_expr;
   switch (drop_type) {
     case parser::DropStatement::DropType::kDatabase:
-
       drop_expr = std::make_unique<OperatorNode>(LogicalDropDatabase::Make(db_oid_).RegisterWithTxnContext(txn_context),
                                                  std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, txn_context);
       break;
@@ -599,10 +571,14 @@ void QueryToOperatorTransformer::Visit(common::ManagedPointer<parser::CopyStatem
         std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, txn_context);
 
     auto target_table = op->GetCopyTable();
+    auto table_oid = accessor_->GetTableOid(target_table->GetTableName());
+    std::vector<catalog::col_oid_t> col_ids;
+    for (auto &col : accessor_->GetSchema(table_oid).GetColumns()) {
+      col_ids.emplace_back(col.Oid());
+    }
 
     auto insert_op = std::make_unique<OperatorNode>(
-        LogicalInsertSelect::Make(db_oid_, accessor_->GetTableOid(target_table->GetTableName()))
-            .RegisterWithTxnContext(txn_context),
+        LogicalInsertSelect::Make(db_oid_, table_oid, std::move(col_ids)).RegisterWithTxnContext(txn_context),
         std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, txn_context);
     insert_op->PushChild(std::move(get_op));
     output_expr_ = std::move(insert_op);
@@ -624,17 +600,28 @@ void QueryToOperatorTransformer::Visit(common::ManagedPointer<parser::CopyStatem
   }
 }
 
-void QueryToOperatorTransformer::Visit(UNUSED_ATTRIBUTE common::ManagedPointer<parser::AnalyzeStatement> op) {
+void QueryToOperatorTransformer::Visit(common::ManagedPointer<parser::AnalyzeStatement> op) {
   OPTIMIZER_LOG_DEBUG("Transforming AnalyzeStatement to operators ...");
   std::vector<catalog::col_oid_t> columns;
-  auto tb_oid = accessor_->GetTableOid(op->GetAnalyzeTable()->GetTableName());
-  auto schema = accessor_->GetSchema(tb_oid);
-  for (const auto &col : *(op->GetColumns())) columns.emplace_back(schema.GetColumn(col).Oid());
+  auto db_oid = op->GetDatabaseOid();
+  auto tb_oid = op->GetTableOid();
+
+  for (auto col_oid : op->GetColumnOids()) {
+    columns.emplace_back(col_oid);
+  }
+
   auto analyze_expr = std::make_unique<OperatorNode>(
-      LogicalAnalyze::Make(accessor_->GetDatabaseOid(op->GetAnalyzeTable()->GetDatabaseName()), tb_oid,
-                           std::move(columns))
-          .RegisterWithTxnContext(accessor_->GetTxn().Get()),
+      LogicalAnalyze::Make(db_oid, tb_oid, std::move(columns)).RegisterWithTxnContext(accessor_->GetTxn().Get()),
       std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, accessor_->GetTxn().Get());
+  auto aggregate_expr = std::make_unique<OperatorNode>(
+      LogicalAggregateAndGroupBy::Make().RegisterWithTxnContext(accessor_->GetTxn().Get()),
+      std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, accessor_->GetTxn().Get());
+  auto get_expr =
+      std::make_unique<OperatorNode>(LogicalGet::Make(db_oid, tb_oid, {}, op->GetAnalyzeTable()->GetAlias(), false)
+                                         .RegisterWithTxnContext(accessor_->GetTxn().Get()),
+                                     std::vector<std::unique_ptr<AbstractOptimizerNode>>{}, accessor_->GetTxn().Get());
+  aggregate_expr->PushChild(std::move(get_expr));
+  analyze_expr->PushChild(std::move(aggregate_expr));
   output_expr_ = std::move(analyze_expr);
 }
 
@@ -888,4 +875,38 @@ QueryToOperatorTransformer::ConstructSelectElementMap(
   return res;
 }
 
-}  // namespace terrier::optimizer
+void QueryToOperatorTransformer::ValidateInsertValues(
+    common::ManagedPointer<parser::InsertStatement> insert_op,
+    const std::vector<common::ManagedPointer<parser::AbstractExpression>> &values,
+    catalog::table_oid_t target_table_id) {
+  // column_objects represents the columns for the current table as defined in its schema
+  auto column_objects = accessor_->GetSchema(target_table_id).GetColumns();
+
+  // INSERT INTO table_name ...
+  if (insert_op->GetInsertColumns()->empty()) {
+    if (values.size() > column_objects.size()) {
+      throw CATALOG_EXCEPTION("INSERT has more expressions than target columns");
+    }
+    if (values.size() < column_objects.size()) {
+      for (auto i = values.size(); i != column_objects.size(); ++i) {
+        // check whether null values or default values can be used in the rest of the columns
+        if (!column_objects[i].Nullable() && column_objects[i].StoredExpression() == nullptr) {
+          throw CATALOG_EXCEPTION(
+              ("Null value in column \"" + column_objects[i].Name() + "\" violates not-null constraint").c_str());
+        }
+      }
+    }
+  } else {
+    // INSERT INTO table_name (col1, col2, ...) ...
+    auto num_columns = insert_op->GetInsertColumns()->size();
+
+    if (values.size() > num_columns) {
+      throw CATALOG_EXCEPTION("INSERT has more expressions than target columns");
+    }
+    if (values.size() < num_columns) {
+      throw CATALOG_EXCEPTION("INSERT has more target columns than expressions");
+    }
+  }
+}
+
+}  // namespace noisepage::optimizer

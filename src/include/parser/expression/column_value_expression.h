@@ -8,19 +8,23 @@
 #include "catalog/catalog_defs.h"
 #include "parser/expression/abstract_expression.h"
 
-namespace terrier {
+namespace noisepage {
 class TpccPlanTest;
-}  // namespace terrier
+}  // namespace noisepage
 
-namespace terrier::optimizer {
+namespace noisepage::optimizer {
 class OptimizerUtil;
-}  // namespace terrier::optimizer
+}  // namespace noisepage::optimizer
 
-namespace terrier::binder {
+namespace noisepage::binder {
 class BinderContext;
 }
 
-namespace terrier::parser {
+namespace noisepage::execution::sql {
+class TableGenerator;
+}  // namespace noisepage::execution::sql
+
+namespace noisepage::parser {
 
 /**
  * ColumnValueExpression represents a reference to a column.
@@ -28,8 +32,8 @@ namespace terrier::parser {
 class ColumnValueExpression : public AbstractExpression {
   // PlanGenerator creates ColumnValueexpressions and will
   // need to set the bound oids
-  friend class terrier::optimizer::OptimizerUtil;
-  friend class terrier::TpccPlanTest;
+  friend class noisepage::optimizer::OptimizerUtil;
+  friend class noisepage::TpccPlanTest;
 
  public:
   /**
@@ -131,7 +135,7 @@ class ColumnValueExpression : public AbstractExpression {
    */
   std::unique_ptr<AbstractExpression> CopyWithChildren(
       std::vector<std::unique_ptr<AbstractExpression>> &&children) const override {
-    TERRIER_ASSERT(children.empty(), "ColumnValueExpression should have no children");
+    NOISEPAGE_ASSERT(children.empty(), "ColumnValueExpression should have no children");
     return Copy();
   }
 
@@ -152,7 +156,7 @@ class ColumnValueExpression : public AbstractExpression {
    */
   void DeriveExpressionName() override;
 
-  void Accept(common::ManagedPointer<binder::SqlNodeVisitor> v) override { v->Visit(common::ManagedPointer(this)); }
+  void Accept(common::ManagedPointer<binder::SqlNodeVisitor> v) override;
 
   /**
    * @return expression serialized to json
@@ -166,6 +170,7 @@ class ColumnValueExpression : public AbstractExpression {
 
  private:
   friend class binder::BinderContext;
+  friend class execution::sql::TableGenerator;
   /** @param database_oid Database OID to be assigned to this expression */
   void SetDatabaseOID(catalog::db_oid_t database_oid) { database_oid_ = database_oid; }
   /** @param table_oid Table OID to be assigned to this expression */
@@ -194,4 +199,4 @@ class ColumnValueExpression : public AbstractExpression {
 
 DEFINE_JSON_HEADER_DECLARATIONS(ColumnValueExpression);
 
-}  // namespace terrier::parser
+}  // namespace noisepage::parser

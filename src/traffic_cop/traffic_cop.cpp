@@ -14,38 +14,88 @@
 #include "common/error/exception.h"
 #include "common/thread_context.h"
 #include "execution/compiler/compilation_context.h"
-#include "execution/compiler/executable_query.h"
 #include "execution/exec/execution_context.h"
 #include "execution/exec/execution_settings.h"
 #include "execution/exec/output.h"
 #include "execution/sql/ddl_executors.h"
+#include "execution/sql/value.h"
 #include "execution/vm/module.h"
 #include "metrics/metrics_store.h"
 #include "network/connection_context.h"
 #include "network/postgres/portal.h"
 #include "network/postgres/postgres_packet_writer.h"
 #include "network/postgres/statement.h"
+#include "nlohmann/json.hpp"
 #include "optimizer/cost_model/trivial_cost_model.h"
+#include "optimizer/statistics/stats_storage.h"
 #include "parser/drop_statement.h"
+#include "parser/explain_statement.h"
 #include "parser/postgresparser.h"
 #include "parser/variable_set_statement.h"
+#include "parser/variable_show_statement.h"
 #include "planner/plannodes/abstract_plan_node.h"
+#include "planner/plannodes/analyze_plan_node.h"
 #include "settings/settings_manager.h"
 #include "storage/recovery/replication_log_provider.h"
 #include "traffic_cop/traffic_cop_defs.h"
 #include "traffic_cop/traffic_cop_util.h"
 #include "transaction/transaction_manager.h"
 
-namespace terrier::trafficcop {
+namespace noisepage::trafficcop {
+
+/** The commit callback argument. */
+struct CommitCallbackArg {
+  std::atomic<uint8_t> persist_countdown_;  ///< A countdown latch for what else needs to persist.
+  std::promise<bool> ready_to_commit_;      ///< Set this promise to true to wake up the thread for commit.
+
+  explicit CommitCallbackArg(const transaction::TransactionPolicy &policy) {
+    // The value for the persist_countdown_ field.
+    // Note that the field will be decremented exactly once every time a commit callback is invoked.
+    persist_countdown_ = 0;
+
+    // Cases: Durability, Replication
+    // - ASYNC, SYNC => This is too weird. Not supporting this.
+    // - ASYNC, ASYNC => 1. The callback is invoked immediately in TransactionManager.
+    // - SYNC, ASYNC => 2. The callback is invoked by DiskLogConsumerTask and PrimaryReplicationManager.
+    // - SYNC, SYNC => 2. The callback is invoked by DiskLogConsumerTask and PrimaryReplicationManager.
+
+    NOISEPAGE_ASSERT(!(policy.durability_ == transaction::DurabilityPolicy::ASYNC &&
+                       policy.replication_ == transaction::ReplicationPolicy::SYNC),
+                     "Haven't reasoned about this case.");
+
+    const transaction::DurabilityPolicy &dur = policy.durability_;
+    const transaction::ReplicationPolicy &rep = policy.replication_;
+
+    if (dur != transaction::DurabilityPolicy::DISABLE) {
+      persist_countdown_ += 1;
+    }
+    if (rep != transaction::ReplicationPolicy::DISABLE) {
+      if (dur == transaction::DurabilityPolicy::ASYNC && rep == transaction::ReplicationPolicy::ASYNC) {
+        // Callback will get invoked by TransactionManager, fake EmptyCallback is passed down.
+      } else {
+        NOISEPAGE_ASSERT(dur != transaction::DurabilityPolicy::DISABLE, "Nothing to replicate?");
+        NOISEPAGE_ASSERT(dur == transaction::DurabilityPolicy::SYNC, "What other policies are there?");
+        persist_countdown_ += 1;
+      }
+    }
+  }
+};
 
 static void CommitCallback(void *const callback_arg) {
-  auto *const promise = reinterpret_cast<std::promise<bool> *const>(callback_arg);
-  promise->set_value(true);
+  auto *const cb_arg = reinterpret_cast<CommitCallbackArg *const>(callback_arg);
+  const uint8_t count_before_sub = cb_arg->persist_countdown_.fetch_sub(1);
+  NOISEPAGE_ASSERT(
+      count_before_sub != 0,
+      "Every component should have invoked the callback already. The policy may not have been correctly initialized?");
+  const bool was_last_callback = count_before_sub == 1;
+  if (was_last_callback) {
+    cb_arg->ready_to_commit_.set_value(true);
+  }
 }
 
 void TrafficCop::BeginTransaction(const common::ManagedPointer<network::ConnectionContext> connection_ctx) const {
-  TERRIER_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::IDLE,
-                 "Invalid ConnectionContext state, already in a transaction.");
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::IDLE,
+                   "Invalid ConnectionContext state, already in a transaction.");
   const auto txn = txn_manager_->BeginTransaction();
   connection_ctx->SetTransaction(common::ManagedPointer(txn));
   connection_ctx->SetAccessor(catalog_->GetAccessor(common::ManagedPointer(txn), connection_ctx->GetDatabaseOid(),
@@ -54,44 +104,39 @@ void TrafficCop::BeginTransaction(const common::ManagedPointer<network::Connecti
 
 void TrafficCop::EndTransaction(const common::ManagedPointer<network::ConnectionContext> connection_ctx,
                                 const network::QueryType query_type) const {
-  TERRIER_ASSERT(query_type == network::QueryType::QUERY_COMMIT || query_type == network::QueryType::QUERY_ROLLBACK,
-                 "EndTransaction called with invalid QueryType.");
+  NOISEPAGE_ASSERT(query_type == network::QueryType::QUERY_COMMIT || query_type == network::QueryType::QUERY_ROLLBACK,
+                   "EndTransaction called with invalid QueryType.");
   const auto txn = connection_ctx->Transaction();
   if (query_type == network::QueryType::QUERY_COMMIT) {
-    TERRIER_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
-                   "Invalid ConnectionContext state, not in a transaction that can be committed.");
+    NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
+                     "Invalid ConnectionContext state, not in a transaction that can be committed.");
     // Set up a blocking callback. Will be invoked when we can tell the client that commit is complete.
-    std::promise<bool> promise;
-    auto future = promise.get_future();
-    TERRIER_ASSERT(future.valid(), "future must be valid for synchronization to work.");
-    txn_manager_->Commit(txn.Get(), CommitCallback, &promise);
+    CommitCallbackArg cb_arg(txn->GetTransactionPolicy());
+    auto future = cb_arg.ready_to_commit_.get_future();
+    NOISEPAGE_ASSERT(future.valid(), "future must be valid for synchronization to work.");
+    txn_manager_->Commit(txn.Get(), CommitCallback, &cb_arg);
     future.wait();
-    TERRIER_ASSERT(future.get(), "Got past the wait() without the value being set to true. That's weird.");
+    NOISEPAGE_ASSERT(future.get(), "Got past the wait() without the value being set to true. That's weird.");
   } else {
-    TERRIER_ASSERT(connection_ctx->TransactionState() != network::NetworkTransactionStateType::IDLE,
-                   "Invalid ConnectionContext state, not in a transaction that can be aborted.");
+    NOISEPAGE_ASSERT(connection_ctx->TransactionState() != network::NetworkTransactionStateType::IDLE,
+                     "Invalid ConnectionContext state, not in a transaction that can be aborted.");
     txn_manager_->Abort(txn.Get());
   }
   connection_ctx->SetTransaction(nullptr);
   connection_ctx->SetAccessor(nullptr);
 }
 
-void TrafficCop::HandBufferToReplication(std::unique_ptr<network::ReadBuffer> buffer) {
-  TERRIER_ASSERT(replication_log_provider_ != DISABLED, "Should not be handing off logs if no log provider was given");
-  replication_log_provider_->HandBufferToReplication(std::move(buffer));
-}
-
 void TrafficCop::ExecuteTransactionStatement(const common::ManagedPointer<network::ConnectionContext> connection_ctx,
                                              const common::ManagedPointer<network::PostgresPacketWriter> out,
                                              const bool explicit_txn_block,
-                                             const terrier::network::QueryType query_type) const {
-  TERRIER_ASSERT(query_type == network::QueryType::QUERY_COMMIT || query_type == network::QueryType::QUERY_ROLLBACK ||
-                     query_type == network::QueryType::QUERY_BEGIN,
-                 "ExecuteTransactionStatement called with invalid QueryType.");
+                                             const noisepage::network::QueryType query_type) const {
+  NOISEPAGE_ASSERT(query_type == network::QueryType::QUERY_COMMIT || query_type == network::QueryType::QUERY_ROLLBACK ||
+                       query_type == network::QueryType::QUERY_BEGIN,
+                   "ExecuteTransactionStatement called with invalid QueryType.");
   switch (query_type) {
     case network::QueryType::QUERY_BEGIN: {
-      TERRIER_ASSERT(connection_ctx->TransactionState() != network::NetworkTransactionStateType::FAIL,
-                     "We're in an aborted state. This should have been caught already before calling this function.");
+      NOISEPAGE_ASSERT(connection_ctx->TransactionState() != network::NetworkTransactionStateType::FAIL,
+                       "We're in an aborted state. This should have been caught already before calling this function.");
       if (explicit_txn_block) {
         out->WriteError({common::ErrorSeverity::WARNING, "there is already a transaction in progress",
                          common::ErrorCode::ERRCODE_ACTIVE_SQL_TRANSACTION});
@@ -128,23 +173,24 @@ void TrafficCop::ExecuteTransactionStatement(const common::ManagedPointer<networ
   out->WriteCommandComplete(query_type, 0);
 }
 
-std::unique_ptr<planner::AbstractPlanNode> TrafficCop::OptimizeBoundQuery(
+std::unique_ptr<optimizer::OptimizeResult> TrafficCop::OptimizeBoundQuery(
     const common::ManagedPointer<network::ConnectionContext> connection_ctx,
-    const common::ManagedPointer<parser::ParseResult> query) const {
-  TERRIER_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
-                 "Not in a valid txn. This should have been caught before calling this function.");
+    const common::ManagedPointer<parser::ParseResult> query,
+    common::ManagedPointer<std::vector<parser::ConstantValueExpression>> parameters) const {
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
+                   "Not in a valid txn. This should have been caught before calling this function.");
 
   return TrafficCopUtil::Optimize(connection_ctx->Transaction(), connection_ctx->Accessor(), query,
                                   connection_ctx->GetDatabaseOid(), stats_storage_,
-                                  std::make_unique<optimizer::TrivialCostModel>(), optimizer_timeout_);
+                                  std::make_unique<optimizer::TrivialCostModel>(), optimizer_timeout_, parameters);
 }
 
 TrafficCopResult TrafficCop::ExecuteSetStatement(common::ManagedPointer<network::ConnectionContext> connection_ctx,
                                                  common::ManagedPointer<network::Statement> statement) const {
-  TERRIER_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::IDLE,
-                 "This is a non-transactional operation and we should not be in a transaction.");
-  TERRIER_ASSERT(statement->GetQueryType() == network::QueryType::QUERY_SET,
-                 "ExecuteSetStatement called with invalid QueryType.");
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::IDLE,
+                   "This is a non-transactional operation and we should not be in a transaction.");
+  NOISEPAGE_ASSERT(statement->GetQueryType() == network::QueryType::QUERY_SET,
+                   "ExecuteSetStatement called with invalid QueryType.");
 
   const auto &set_stmt = statement->RootStatement().CastManagedPointerTo<parser::VariableSetStatement>();
 
@@ -167,13 +213,38 @@ TrafficCopResult TrafficCop::ExecuteSetStatement(common::ManagedPointer<network:
   return {ResultType::COMPLETE, 0u};
 }
 
+TrafficCopResult TrafficCop::ExecuteShowStatement(
+    common::ManagedPointer<network::ConnectionContext> connection_ctx,
+    common::ManagedPointer<network::Statement> statement,
+    const common::ManagedPointer<network::PostgresPacketWriter> out) const {
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::IDLE,
+                   "This is a non-transactional operation and we should not be in a transaction.");
+  NOISEPAGE_ASSERT(statement->GetQueryType() == network::QueryType::QUERY_SHOW,
+                   "ExecuteSetStatement called with invalid QueryType.");
+
+  const auto &show_stmt UNUSED_ATTRIBUTE =
+      statement->RootStatement().CastManagedPointerTo<parser::VariableShowStatement>();
+
+  NOISEPAGE_ASSERT(show_stmt->GetName() == "transaction_isolation", "Nothing else is supported right now.");
+
+  auto expr = std::make_unique<parser::ConstantValueExpression>(type::TypeId::VARCHAR);
+  expr->SetAlias("transaction_isolation");
+  std::vector<noisepage::planner::OutputSchema::Column> cols;
+  cols.emplace_back("transaction_isolation", type::TypeId::VARCHAR, std::move(expr));
+  execution::sql::StringVal dummy_result("snapshot isolation");
+
+  out->WriteRowDescription(cols, {network::FieldFormat::text});
+  out->WriteDataRow(reinterpret_cast<const byte *>(&dummy_result), cols, {network::FieldFormat::text});
+  return {ResultType::COMPLETE, 0u};
+}
+
 TrafficCopResult TrafficCop::ExecuteCreateStatement(
     const common::ManagedPointer<network::ConnectionContext> connection_ctx,
     const common::ManagedPointer<planner::AbstractPlanNode> physical_plan,
-    const terrier::network::QueryType query_type) const {
-  TERRIER_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
-                 "Not in a valid txn. This should have been caught before calling this function.");
-  TERRIER_ASSERT(
+    const noisepage::network::QueryType query_type) const {
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
+                   "Not in a valid txn. This should have been caught before calling this function.");
+  NOISEPAGE_ASSERT(
       query_type == network::QueryType::QUERY_CREATE_TABLE || query_type == network::QueryType::QUERY_CREATE_SCHEMA ||
           query_type == network::QueryType::QUERY_CREATE_INDEX || query_type == network::QueryType::QUERY_CREATE_DB ||
           query_type == network::QueryType::QUERY_CREATE_VIEW || query_type == network::QueryType::QUERY_CREATE_TRIGGER,
@@ -224,10 +295,10 @@ TrafficCopResult TrafficCop::ExecuteCreateStatement(
 TrafficCopResult TrafficCop::ExecuteDropStatement(
     const common::ManagedPointer<network::ConnectionContext> connection_ctx,
     const common::ManagedPointer<planner::AbstractPlanNode> physical_plan,
-    const terrier::network::QueryType query_type) const {
-  TERRIER_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
-                 "Not in a valid txn. This should have been caught before calling this function.");
-  TERRIER_ASSERT(
+    const noisepage::network::QueryType query_type) const {
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
+                   "Not in a valid txn. This should have been caught before calling this function.");
+  NOISEPAGE_ASSERT(
       query_type == network::QueryType::QUERY_DROP_TABLE || query_type == network::QueryType::QUERY_DROP_SCHEMA ||
           query_type == network::QueryType::QUERY_DROP_INDEX || query_type == network::QueryType::QUERY_DROP_DB ||
           query_type == network::QueryType::QUERY_DROP_VIEW || query_type == network::QueryType::QUERY_DROP_TRIGGER,
@@ -275,6 +346,27 @@ TrafficCopResult TrafficCop::ExecuteDropStatement(
                                                common::ErrorCode::ERRCODE_DATA_EXCEPTION)};
 }
 
+TrafficCopResult TrafficCop::ExecuteExplainStatement(
+    const common::ManagedPointer<network::ConnectionContext> connection_ctx,
+    const common::ManagedPointer<network::PostgresPacketWriter> out,
+    const common::ManagedPointer<planner::AbstractPlanNode> physical_plan) const {
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
+                   "Not in a valid txn. This should have been caught before calling this function.");
+
+  // Dump to JSON string, wrap in StringVal, write the data row to the client
+  // Create dummy column output scheme for writing data row
+  std::vector<planner::OutputSchema::Column> output_columns;
+  output_columns.emplace_back("QUERY PLAN", type::TypeId::VARCHAR, nullptr);
+
+  const std::string plan_string = physical_plan->ToJson().dump(4);
+  const execution::sql::StringVal plan_string_val =
+      execution::sql::StringVal(plan_string.c_str(), plan_string.length());
+  out->WriteDataRow(reinterpret_cast<const byte *const>(&plan_string_val), output_columns,
+                    {network::FieldFormat::text});
+
+  return {ResultType::COMPLETE, 0u};
+}
+
 std::variant<std::unique_ptr<parser::ParseResult>, common::ErrorData> TrafficCop::ParseQuery(
     const std::string &query, const common::ManagedPointer<network::ConnectionContext> connection_ctx) const {
   std::variant<std::unique_ptr<parser::ParseResult>, common::ErrorData> result;
@@ -294,11 +386,11 @@ TrafficCopResult TrafficCop::BindQuery(
     const common::ManagedPointer<network::ConnectionContext> connection_ctx,
     const common::ManagedPointer<network::Statement> statement,
     const common::ManagedPointer<std::vector<parser::ConstantValueExpression>> parameters) const {
-  TERRIER_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
-                 "Not in a valid txn. This should have been caught before calling this function.");
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
+                   "Not in a valid txn. This should have been caught before calling this function.");
 
   try {
-    if (statement->PhysicalPlan() == nullptr || !UseQueryCache()) {
+    if (statement->OptimizeResult() == nullptr || !UseQueryCache()) {
       // it's not cached, bind it
       binder::BindNodeVisitor visitor(connection_ctx->Accessor(), connection_ctx->GetDatabaseOid());
       if (parameters != nullptr && !parameters->empty()) {
@@ -336,14 +428,15 @@ TrafficCopResult TrafficCop::CodegenPhysicalPlan(
     const common::ManagedPointer<network::ConnectionContext> connection_ctx,
     const common::ManagedPointer<network::PostgresPacketWriter> out,
     const common::ManagedPointer<network::Portal> portal) const {
-  TERRIER_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
-                 "Not in a valid txn. This should have been caught before calling this function.");
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
+                   "Not in a valid txn. This should have been caught before calling this function.");
   const auto query_type UNUSED_ATTRIBUTE = portal->GetStatement()->GetQueryType();
-  const auto physical_plan = portal->PhysicalPlan();
-  TERRIER_ASSERT(query_type == network::QueryType::QUERY_SELECT || query_type == network::QueryType::QUERY_INSERT ||
-                     query_type == network::QueryType::QUERY_CREATE_INDEX ||
-                     query_type == network::QueryType::QUERY_UPDATE || query_type == network::QueryType::QUERY_DELETE,
-                 "CodegenAndRunPhysicalPlan called with invalid QueryType.");
+  const auto physical_plan = portal->OptimizeResult()->GetPlanNode();
+  NOISEPAGE_ASSERT(
+      query_type == network::QueryType::QUERY_SELECT || query_type == network::QueryType::QUERY_INSERT ||
+          query_type == network::QueryType::QUERY_CREATE_INDEX || query_type == network::QueryType::QUERY_UPDATE ||
+          query_type == network::QueryType::QUERY_DELETE || query_type == network::QueryType::QUERY_ANALYZE,
+      "CodegenAndRunPhysicalPlan called with invalid QueryType.");
 
   if (portal->GetStatement()->GetExecutableQuery() != nullptr && use_query_cache_) {
     // We've already codegen'd this, move on...
@@ -352,10 +445,11 @@ TrafficCopResult TrafficCop::CodegenPhysicalPlan(
 
   // TODO(WAN): see #1047
   execution::exec::ExecutionSettings exec_settings{};
+  exec_settings.UpdateFromSettingsManager(settings_manager_);
+
   auto exec_query = execution::compiler::CompilationContext::Compile(
       *physical_plan, exec_settings, connection_ctx->Accessor().Get(),
-      execution::compiler::CompilationMode::Interleaved,
-      common::ManagedPointer<const std::string>(&portal->GetStatement()->GetQueryText()));
+      execution::compiler::CompilationMode::Interleaved, std::nullopt, portal->OptimizeResult()->GetPlanMetaData());
 
   // TODO(Matt): handle code generation failing
 
@@ -363,8 +457,9 @@ TrafficCopResult TrafficCop::CodegenPhysicalPlan(
       common::thread_context.metrics_store_ != nullptr &&
       common::thread_context.metrics_store_->ComponentToRecord(metrics::MetricsComponent::QUERY_TRACE);
   if (query_trace_metrics_enabled) {
-    common::thread_context.metrics_store_->RecordQueryText(
-        exec_query->GetQueryId(), portal->GetStatement()->GetQueryText(), metrics::MetricsUtil::Now());
+    common::thread_context.metrics_store_->RecordQueryText(connection_ctx->GetDatabaseOid(), exec_query->GetQueryId(),
+                                                           portal->GetStatement()->GetQueryText(), portal->Parameters(),
+                                                           metrics::MetricsUtil::Now());
   }
 
   portal->GetStatement()->SetExecutableQuery(std::move(exec_query));
@@ -375,20 +470,54 @@ TrafficCopResult TrafficCop::CodegenPhysicalPlan(
 TrafficCopResult TrafficCop::RunExecutableQuery(const common::ManagedPointer<network::ConnectionContext> connection_ctx,
                                                 const common::ManagedPointer<network::PostgresPacketWriter> out,
                                                 const common::ManagedPointer<network::Portal> portal) const {
-  TERRIER_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
-                 "Not in a valid txn. This should have been caught before calling this function.");
+  NOISEPAGE_ASSERT(connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK,
+                   "Not in a valid txn. This should have been caught before calling this function.");
   const auto query_type = portal->GetStatement()->GetQueryType();
-  const auto physical_plan = portal->PhysicalPlan();
-  TERRIER_ASSERT(query_type == network::QueryType::QUERY_SELECT || query_type == network::QueryType::QUERY_INSERT ||
-                     query_type == network::QueryType::QUERY_CREATE_INDEX ||
-                     query_type == network::QueryType::QUERY_UPDATE || query_type == network::QueryType::QUERY_DELETE,
-                 "CodegenAndRunPhysicalPlan called with invalid QueryType.");
+  const auto physical_plan = portal->OptimizeResult()->GetPlanNode();
+  NOISEPAGE_ASSERT(
+      query_type == network::QueryType::QUERY_SELECT || query_type == network::QueryType::QUERY_INSERT ||
+          query_type == network::QueryType::QUERY_CREATE_INDEX || query_type == network::QueryType::QUERY_UPDATE ||
+          query_type == network::QueryType::QUERY_DELETE || query_type == network::QueryType::QUERY_ANALYZE,
+      "CodegenAndRunPhysicalPlan called with invalid QueryType.");
+
+  /*
+   * ANALYZE will update the statistics held in the pg_statistic catalog table. These statistics are also cached in
+   * StatsStorage. So once ANALYZE commits, we need to mark the columns updated as dirty in StatsStorage.
+   */
+  if (query_type == network::QueryType::QUERY_ANALYZE) {
+    const auto analyze_plan = physical_plan.CastManagedPointerTo<planner::AnalyzePlanNode>();
+    auto db_oid = analyze_plan->GetDatabaseOid();
+    auto table_oid = analyze_plan->GetTableOid();
+    std::vector<catalog::col_oid_t> col_oids = analyze_plan->GetColumnOids();
+    connection_ctx->Transaction()->RegisterCommitAction(
+        [=]() { stats_storage_->MarkStatsStale(db_oid, table_oid, col_oids); });
+  }
+
   execution::exec::OutputWriter writer(physical_plan->GetOutputSchema(), out, portal->ResultFormats());
 
+  // A std::function<> requires the target to be CopyConstructible and CopyAssignable. In certain
+  // cases constructing a std::function<> copies the target. This can lead to cases where invoking
+  // the std::function<> will call operator() on a OutputWriter different from the writer above.
+  //
+  // We utilize an extra lambda to capture a pointer to writer. This will allow all OutputBuffers
+  // created during execution to write to the output consumer using the same writer instance
+  // (which will also yield a correct writer.NumRows()).
+  execution::exec::OutputWriter *capture_writer = &writer;
+  execution::exec::OutputCallback callback = [capture_writer](byte *tuples, uint32_t num_tuples, uint32_t tuple_size) {
+    (*capture_writer)(tuples, num_tuples, tuple_size);
+  };
+
   execution::exec::ExecutionSettings exec_settings{};
+  exec_settings.UpdateFromSettingsManager(settings_manager_);
+
+  common::ManagedPointer<metrics::MetricsManager> metrics = nullptr;
+  if (common::thread_context.metrics_store_ != nullptr) {
+    metrics = common::thread_context.metrics_store_->MetricsManager();
+  }
+
   auto exec_ctx = std::make_unique<execution::exec::ExecutionContext>(
-      connection_ctx->GetDatabaseOid(), connection_ctx->Transaction(), writer, physical_plan->GetOutputSchema().Get(),
-      connection_ctx->Accessor(), exec_settings);
+      connection_ctx->GetDatabaseOid(), connection_ctx->Transaction(), callback, physical_plan->GetOutputSchema().Get(),
+      connection_ctx->Accessor(), exec_settings, metrics, replication_manager_, recovery_manager_);
 
   exec_ctx->SetParams(portal->Parameters());
 
@@ -414,7 +543,8 @@ TrafficCopResult TrafficCop::RunExecutableQuery(const common::ManagedPointer<net
       common::thread_context.metrics_store_->ComponentToRecord(metrics::MetricsComponent::QUERY_TRACE);
 
   if (query_trace_metrics_enabled) {
-    common::thread_context.metrics_store_->RecordQueryTrace(exec_query->GetQueryId(), metrics::MetricsUtil::Now());
+    common::thread_context.metrics_store_->RecordQueryTrace(connection_ctx->GetDatabaseOid(), exec_query->GetQueryId(),
+                                                            metrics::MetricsUtil::Now(), portal->Parameters());
   }
 
   if (connection_ctx->TransactionState() == network::NetworkTransactionStateType::BLOCK) {
@@ -426,7 +556,7 @@ TrafficCopResult TrafficCop::RunExecutableQuery(const common::ManagedPointer<net
     }
     // Other queries (INSERT, UPDATE, DELETE) retrieve rows affected from the execution context since other queries
     // might not have any output otherwise
-    return {ResultType::COMPLETE, exec_ctx->RowsAffected()};
+    return {ResultType::COMPLETE, exec_ctx->GetRowsAffected()};
   }
 
   // TODO(Matt): We need a more verbose way to say what happened during execution (INSERT failed for key conflict,
@@ -438,6 +568,8 @@ TrafficCopResult TrafficCop::RunExecutableQuery(const common::ManagedPointer<net
 std::pair<catalog::db_oid_t, catalog::namespace_oid_t> TrafficCop::CreateTempNamespace(
     const network::connection_id_t connection_id, const std::string &database_name) {
   auto *const txn = txn_manager_->BeginTransaction();
+  txn->SetReplicationPolicy(transaction::ReplicationPolicy::DISABLE);
+
   const auto db_oid = catalog_->GetDatabaseOid(common::ManagedPointer(txn), database_name);
 
   if (db_oid == catalog::INVALID_DATABASE_OID) {
@@ -461,12 +593,14 @@ std::pair<catalog::db_oid_t, catalog::namespace_oid_t> TrafficCop::CreateTempNam
 }
 
 bool TrafficCop::DropTempNamespace(const catalog::db_oid_t db_oid, const catalog::namespace_oid_t ns_oid) {
-  TERRIER_ASSERT(db_oid != catalog::INVALID_DATABASE_OID, "Called DropTempNamespace() with an invalid database oid.");
-  TERRIER_ASSERT(ns_oid != catalog::INVALID_NAMESPACE_OID, "Called DropTempNamespace() with an invalid namespace oid.");
+  NOISEPAGE_ASSERT(db_oid != catalog::INVALID_DATABASE_OID, "Called DropTempNamespace() with an invalid database oid.");
+  NOISEPAGE_ASSERT(ns_oid != catalog::INVALID_NAMESPACE_OID,
+                   "Called DropTempNamespace() with an invalid namespace oid.");
   auto *const txn = txn_manager_->BeginTransaction();
-  const auto db_accessor = catalog_->GetAccessor(common::ManagedPointer(txn), db_oid, DISABLED);
+  txn->SetReplicationPolicy(transaction::ReplicationPolicy::DISABLE);
 
-  TERRIER_ASSERT(db_accessor != nullptr, "Catalog failed to provide a CatalogAccessor. Was the db_oid still valid?");
+  const auto db_accessor = catalog_->GetAccessor(common::ManagedPointer(txn), db_oid, DISABLED);
+  NOISEPAGE_ASSERT(db_accessor != nullptr, "Catalog failed to provide a CatalogAccessor. Was the db_oid still valid?");
 
   const auto result = db_accessor->DropNamespace(ns_oid);
   if (result) {
@@ -477,4 +611,4 @@ bool TrafficCop::DropTempNamespace(const catalog::db_oid_t db_oid, const catalog
   return result;
 }
 
-}  // namespace terrier::trafficcop
+}  // namespace noisepage::trafficcop

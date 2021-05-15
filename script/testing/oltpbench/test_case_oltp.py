@@ -1,17 +1,13 @@
-#!/usr/bin/python3
-import os
-import sys
-import subprocess
 import json
-import traceback
-import shutil
+import os
 import time
-from util.constants import ErrorCode
-from util.common import run_command
-from util.test_case import TestCase
 from xml.etree import ElementTree
-from oltpbench import constants
-from oltpbench.reporting.report_result import report
+
+from ..reporting.report_result import report_oltpbench_result
+from ..util.common import run_command
+from ..util.constants import INCREMENTAL_METRIC_FREQ, LOG, ErrorCode
+from ..util.test_case import TestCase
+from . import constants
 
 
 class TestCaseOLTPBench(TestCase):
@@ -20,46 +16,45 @@ class TestCaseOLTPBench(TestCase):
     def __init__(self, args):
         TestCase.__init__(self, args)
 
-        self.set_oltp_attributes(args)
-        self.init_test_case()
+        self._set_oltpbench_attributes(args)
+        self._init_test_case()
 
-    def set_oltp_attributes(self,args):
-        # oltpbench specific attributes
+    def _set_oltpbench_attributes(self, args):
+        """
+        Parse the arguments to set all the relevant OLTPBench attributes.
+
+        Parameters
+        ----------
+        args : dict
+            The result of parse_command_line_args().
+        """
         self.benchmark = str(args.get("benchmark"))
-        self.scalefactor = float(
-            args.get("scale_factor", constants.OLTPBENCH_DEFAULT_SCALEFACTOR))
-        self.terminals = int(
-            args.get("terminals", constants.OLTPBENCH_DEFAULT_TERMINALS))
-        self.loader_threads = int(
-            args.get("loader_threads",
-                          constants.OLTPBENCH_DEFAULT_LOADER_THREADS))
-        self.client_time = int(
-            args.get("client_time", constants.OLTPBENCH_DEFAULT_TIME))
+        self.scalefactor = float(args.get("scale_factor", constants.OLTPBENCH_DEFAULT_SCALEFACTOR))
+        self.terminals = int(args.get("terminals", constants.OLTPBENCH_DEFAULT_TERMINALS))
+        self.loader_threads = int(args.get("loader_threads", constants.OLTPBENCH_DEFAULT_LOADER_THREADS))
+        self.client_time = int(args.get("client_time", constants.OLTPBENCH_DEFAULT_TIME))
         self.weights = str(args.get("weights"))
         self.transaction_isolation = str(
-            args.get("transaction_isolation",
-                          constants.OLTPBENCH_DEFAULT_TRANSACTION_ISOLATION))
+            args.get("transaction_isolation", constants.OLTPBENCH_DEFAULT_TRANSACTION_ISOLATION))
         self.query_mode = args.get("query_mode")
-        self.db_restart = args.get("db_restart",constants.OLTPBENCH_DEFAULT_DATABASE_RESTART)
-        self.db_create = args.get("db_create",constants.OLTPBENCH_DEFAULT_DATABASE_CREATE)
-        self.db_load = args.get("db_load",constants.OLTPBENCH_DEFAULT_DATABASE_LOAD)
-        self.db_execute = args.get("db_execute",constants.OLTPBENCH_DEFAULT_DATABASE_EXECUTE)
-        self.buckets = args.get("buckets",constants.OLTPBENCH_DEFAULT_BUCKETS)
-
+        self.db_restart = args.get("db_restart", constants.OLTPBENCH_DEFAULT_DATABASE_RESTART)
+        self.db_create = args.get("db_create", constants.OLTPBENCH_DEFAULT_DATABASE_CREATE)
+        self.db_load = args.get("db_load", constants.OLTPBENCH_DEFAULT_DATABASE_LOAD)
+        self.db_execute = args.get("db_execute", constants.OLTPBENCH_DEFAULT_DATABASE_EXECUTE)
+        self.buckets = args.get("buckets", INCREMENTAL_METRIC_FREQ)
         self.server_data = args.get("server_data")
 
-        self.publish_results = args.get("publish_results",constants.OLTPBENCH_DEFAULT_REPORT_SERVER)
+        self.publish_results = args.get("publish_results", constants.OLTPBENCH_DEFAULT_REPORT_SERVER)
         self.publish_username = args.get("publish_username")
         self.publish_password = args.get("publish_password")
 
-    def init_test_case(self):
+    def _init_test_case(self):
         # oltpbench xml file paths
         xml_file = "{}_config.xml".format(self.benchmark)
         self.xml_config = os.path.join(constants.OLTPBENCH_DIR_CONFIG, xml_file)
-        self.xml_template = os.path.join(constants.OLTPBENCH_DIR_CONFIG,
-                                         "sample_{}".format(xml_file))
+        self.xml_template = os.path.join(constants.OLTPBENCH_DIR_CONFIG, "sample_{}".format(xml_file))
 
-        # for different testing, oltpbench needs different folder to put testing results 
+        # for different testing, oltpbench needs different folder to put testing results
         self.filename_suffix = "{BENCHMARK}_{QUERYMODE}_{TERMINALS}_{SCALEFACTOR}_{CLIENTTIME}_{STARTTIME}".format(
             BENCHMARK=self.benchmark,
             QUERYMODE=self.query_mode,
@@ -71,18 +66,18 @@ class TestCaseOLTPBench(TestCase):
         # base directory for the result files, default is in the 'oltp_result' folder under the current directory
         self.test_result_base_dir = self.args.get("test_result_dir")
         if not self.test_result_base_dir:
-            self.test_result_base_dir = os.path.join(
-                os.getcwd(), "oltp_result")
+            self.test_result_base_dir = os.path.join(os.getcwd(),
+                                                     "oltp_result")
 
         # after the script finishes, this director will include the generated files: expconfig, summary, etc.
-        self.test_result_dir = os.path.join(
-            self.test_result_base_dir, self.filename_suffix)
+        self.test_result_dir = os.path.join(self.test_result_base_dir,
+                                            self.filename_suffix)
 
         # oltpbench test results
         self.test_output_file = self.args.get("test_output_file")
         if not self.test_output_file:
-            self.test_output_file = os.path.join(
-                self.test_result_dir, "oltpbench.log")
+            self.test_output_file = os.path.join(self.test_result_dir,
+                                                 "oltpbench.log")
 
         # oltpbench historgrams results - json format
         self.test_histograms_json_file = self.args.get("test_json_histograms")
@@ -92,11 +87,8 @@ class TestCaseOLTPBench(TestCase):
             constants.OLTPBENCH_GIT_LOCAL_PATH, self.test_histograms_json_file)
 
         # oltpbench initiate database and load data
-        self.oltp_flag = "--histograms --create={CREATE} --load={LOAD} --execute={EXECUTE} -s {BUCKETS}".format(
-            CREATE=self.db_create,
-            LOAD=self.db_load,
-            EXECUTE=self.db_execute,
-            BUCKETS=self.buckets)
+        self.oltp_flag = "--histograms --execute={EXECUTE} -s {BUCKETS}".format(
+            EXECUTE=self.db_execute, BUCKETS=self.buckets)
 
         # oltpbench test command
         self.test_command = "{BIN} -b {BENCHMARK} -c {XML} -d {RESULTS} {FLAGS} -json-histograms {HISTOGRAMS}".format(
@@ -107,45 +99,59 @@ class TestCaseOLTPBench(TestCase):
             FLAGS=self.oltp_flag,
             HISTOGRAMS=self.test_histogram_path)
         self.test_command_cwd = constants.OLTPBENCH_GIT_LOCAL_PATH
-        self.test_error_msg = constants.OLTPBENCH_TEST_ERROR_MSG
 
     def run_pre_test(self):
-        self.config_xml_file()
-        self.create_result_dir()
+        self._config_xml_file()
+        self._create_result_dir()
+        self._create_and_load_db()
 
     def run_post_test(self):
         # validate the OLTP result
-        self.validate_result()
+        self._validate_result()
 
         # publish results
         if self.publish_results:
-            report(self.publish_results, self.server_data, os.path.join(
-                os.getcwd(), "oltp_result",self.filename_suffix), self.publish_username, self.publish_password, self.query_mode)
+            report_oltpbench_result(
+                self.publish_results, self.server_data,
+                os.path.join(os.getcwd(), "oltp_result",
+                             self.filename_suffix), self.publish_username,
+                self.publish_password, self.mem_metrics, self.query_mode)
 
-    def create_result_dir(self):
+    def _create_result_dir(self):
+        """
+        Create the directory for the result output files if not exists.
+        """
         if not os.path.exists(self.test_result_dir):
             os.makedirs(self.test_result_dir)
 
-    def get_db_url(self):
-        """ format the DB URL for the JDBC connection """
-        # format the url base
-        db_url_base = "jdbc:postgresql://{}:{}/terrier".format(
-            self.db_host, self.db_port)
-        # format the url params
-        db_url_params = ""
-        if self.query_mode:
-            db_url_params += "?preferQueryMode={}".format(self.query_mode)
-        # aggregate the url
-        db_url = "{BASE}{PARAMS}".format(BASE=db_url_base,
-                                         PARAMS=db_url_params)
+    def _create_and_load_db(self):
+        """
+        Create the database and load the data before the actual test execution.
+        """
+        cmd = "{BIN} -c {XML} -b {BENCHMARK} --create={CREATE} --load={LOAD}".format(
+            BIN=constants.OLTPBENCH_DEFAULT_BIN,
+            XML=self.xml_config,
+            BENCHMARK=self.benchmark,
+            CREATE=self.db_create,
+            LOAD=self.db_load)
+        rc, stdout, stderr = run_command(cmd,
+                                         cwd=self.test_command_cwd)
+        if rc != ErrorCode.SUCCESS:
+            LOG.info(stdout.read())
+            LOG.error(stderr.read())
+            raise RuntimeError("Error: Unable to create and load the database.")
+
+    def _get_db_url(self):
+        db_url = f"jdbc:postgresql://{self.db_host}:{self.db_port}/noisepage"
+        db_url += f"?preferQueryMode={self.query_mode}" if self.query_mode else ""
         return db_url
 
-    def config_xml_file(self):
+    def _config_xml_file(self):
         xml = ElementTree.parse(self.xml_template)
         root = xml.getroot()
         root.find("dbtype").text = constants.OLTPBENCH_DEFAULT_DBTYPE
         root.find("driver").text = constants.OLTPBENCH_DEFAULT_DRIVER
-        root.find("DBUrl").text = self.get_db_url()
+        root.find("DBUrl").text = self._get_db_url()
         root.find("username").text = constants.OLTPBENCH_DEFAULT_USERNAME
         root.find("password").text = constants.OLTPBENCH_DEFAULT_PASSWORD
         root.find("isolation").text = str(self.transaction_isolation)
@@ -168,29 +174,34 @@ class TestCaseOLTPBench(TestCase):
 
         xml.write(self.xml_config)
 
-    def validate_result(self):
-        """read the results file"""
+    def _validate_result(self):
+        """
+        Verify that the results do not indicate an error in the OLTPBench test.
+
+        Raises
+        -------
+        FileNotFoundError
+            If self.test_histogram_path does not exist.
+        RuntimeError
+            If the self.test_histogram_path file has unexpected results.
+        """
 
         # Make sure the file exists before we try to open it.
         # If it's not there, we'll dump out the contents of the directory to make it
         # easier to determine whether or not we are crazy when running Jenkins.
         if not os.path.exists(self.test_histogram_path):
             print("=" * 50)
-            print("Directory Contents: {}".format(
-                os.path.dirname(self.test_histogram_path)))
-            print("\n".join(
-                os.listdir(os.path.dirname(self.test_histogram_path))))
+            print("Directory Contents: {}".format(os.path.dirname(self.test_histogram_path)))
+            print("\n".join(os.listdir(os.path.dirname(self.test_histogram_path))))
             print("=" * 50)
-            msg = "Unable to find OLTP-Bench result file '{}'".format(
-                self.test_histogram_path)
-            raise RuntimeError(msg)
+            raise FileNotFoundError(f"Unable to find OLTPBench result file: {self.test_histogram_path}")
 
         with open(self.test_histogram_path) as oltp_result_file:
             test_result = json.load(oltp_result_file)
         unexpected_result = test_result.get("unexpected", {}).get("HISTOGRAM")
         if unexpected_result and unexpected_result.keys():
             for test in unexpected_result.keys():
-                if (unexpected_result[test] != 0):
+                if unexpected_result[test] != 0:
                     raise RuntimeError(str(unexpected_result))
         else:
             raise RuntimeError(str(unexpected_result))

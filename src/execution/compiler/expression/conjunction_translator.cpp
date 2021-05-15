@@ -7,7 +7,7 @@
 #include "parser/expression/conjunction_expression.h"
 #include "spdlog/fmt/fmt.h"
 
-namespace terrier::execution::compiler {
+namespace noisepage::execution::compiler {
 
 ConjunctionTranslator::ConjunctionTranslator(const parser::ConjunctionExpression &expr,
                                              CompilationContext *compilation_context)
@@ -30,9 +30,9 @@ ast::Expr *ConjunctionTranslator::DeriveValue(WorkContext *ctx, const ColumnValu
       return codegen->BinaryOp(parsing::Token::Type::OR, left_val, right_val);
     default: {
       throw NOT_IMPLEMENTED_EXCEPTION(
-          fmt::format("Translation of conjunction type {}", parser::ExpressionTypeToString(expr_type, true)));
+          fmt::format("Translation of conjunction type {}", parser::ExpressionTypeToString(expr_type)));
     }
   }
 }
 
-}  // namespace terrier::execution::compiler
+}  // namespace noisepage::execution::compiler
