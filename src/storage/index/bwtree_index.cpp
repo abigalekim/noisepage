@@ -244,9 +244,4 @@ template class BwTreeIndex<CompactIntsKey<16>>;
 template class BwTreeIndex<CompactIntsKey<24>>;
 template class BwTreeIndex<CompactIntsKey<32>>;
 
-template class BwTreeIndex<GenericKey<64>>;
-template class BwTreeIndex<GenericKey<128>>;
-template class BwTreeIndex<GenericKey<256>>;
-template class BwTreeIndex<GenericKey<512>>;
-
 }  // namespace noisepage::storage::index

@@ -22,7 +22,7 @@ class BwTree;
 namespace noisepage::storage::index {
 template <uint8_t KeySize>
 class CompactIntsKey;
-template <uint16_t KeySize>
+
 class GenericKey;
 
 /**
@@ -143,10 +143,5 @@ extern template class BwTreeIndex<CompactIntsKey<8>>;
 extern template class BwTreeIndex<CompactIntsKey<16>>;
 extern template class BwTreeIndex<CompactIntsKey<24>>;
 extern template class BwTreeIndex<CompactIntsKey<32>>;
-
-extern template class BwTreeIndex<GenericKey<64>>;
-extern template class BwTreeIndex<GenericKey<128>>;
-extern template class BwTreeIndex<GenericKey<256>>;
-extern template class BwTreeIndex<GenericKey<512>>;
 
 }  // namespace noisepage::storage::index

@@ -23,7 +23,7 @@ namespace noisepage::storage::index {
 
 template <uint16_t KeySize>
 class HashKey;
-template <uint16_t KeySize>
+
 class GenericKey;
 
 /**
@@ -118,8 +118,6 @@ extern template class HashIndex<HashKey<64>>;
 extern template class HashIndex<HashKey<128>>;
 extern template class HashIndex<HashKey<256>>;
 
-extern template class HashIndex<GenericKey<64>>;
-extern template class HashIndex<GenericKey<128>>;
-extern template class HashIndex<GenericKey<256>>;
+extern template class HashIndex<GenericKey>;
 
 }  // namespace noisepage::storage::index

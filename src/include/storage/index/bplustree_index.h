@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "common/managed_pointer.h"
+#include "generic_key.h"
 #include "storage/index/index.h"
 #include "storage/index/index_defs.h"
 
@@ -15,8 +16,7 @@ template <typename KeyType, typename ValueType, typename KeyComparator, typename
 class BPlusTree;
 template <uint8_t KeySize>
 class CompactIntsKey;
-template <uint16_t KeySize>
-class GenericKey;
+
 
 /**
  * Wrapper around B+ Tree.
@@ -132,9 +132,6 @@ extern template class BPlusTreeIndex<CompactIntsKey<16>>;
 extern template class BPlusTreeIndex<CompactIntsKey<24>>;
 extern template class BPlusTreeIndex<CompactIntsKey<32>>;
 
-extern template class BPlusTreeIndex<GenericKey<64>>;
-extern template class BPlusTreeIndex<GenericKey<128>>;
-extern template class BPlusTreeIndex<GenericKey<256>>;
-extern template class BPlusTreeIndex<GenericKey<512>>;
+extern template class BPlusTreeIndex<GenericKey>;
 
 }  // namespace noisepage::storage::index

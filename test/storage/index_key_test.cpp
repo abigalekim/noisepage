@@ -315,7 +315,7 @@ class IndexKeyTests : public TerrierTest {
    * Sets the generic key to contain the given string. If c_str is nullptr, the key is zeroed out.
    */
   template <uint8_t KeySize>
-  void SetGenericKeyFromString(const IndexMetadata &metadata, GenericKey<KeySize> *key, ProjectedRow *pr,
+  void SetGenericKeyFromString(const IndexMetadata &metadata, GenericKey *key, ProjectedRow *pr,
                                const char *c_str) {
     if (c_str != nullptr) {
       auto len = static_cast<uint32_t>(std::strlen(c_str));
@@ -344,10 +344,10 @@ class IndexKeyTests : public TerrierTest {
   template <uint8_t KeySize>
   void TestGenericKeyStrings(const IndexMetadata &metadata, ProjectedRow *pr, char *c_str1, char *c_str2) {
     const auto generic_eq64 =
-        std::equal_to<GenericKey<KeySize>>();                    // NOLINT transparent functors can't deduce template
-    const auto generic_lt64 = std::less<GenericKey<KeySize>>();  // NOLINT transparent functors can't deduce template
+        std::equal_to<GenericKey>();                    // NOLINT transparent functors can't deduce template
+    const auto generic_lt64 = std::less<GenericKey>();  // NOLINT transparent functors can't deduce template
 
-    GenericKey<KeySize> key1, key2;
+    GenericKey key1, key2;
     SetGenericKeyFromString<KeySize>(metadata, &key1, pr, c_str1);
     SetGenericKeyFromString<KeySize>(metadata, &key2, pr, c_str2);
 
@@ -952,13 +952,13 @@ TEST_F(IndexKeyTests, CompactIntsKeyNumericComparisons) {
 
 // NOLINTNEXTLINE
 TEST_F(IndexKeyTests, GenericKeyNumericComparisons) {
-  NumericComparisons<GenericKey<64>, int8_t>(type::TypeId::TINYINT, true);
-  NumericComparisons<GenericKey<64>, int16_t>(type::TypeId::SMALLINT, true);
-  NumericComparisons<GenericKey<64>, int32_t>(type::TypeId::INTEGER, true);
-  NumericComparisons<GenericKey<64>, uint32_t>(type::TypeId::DATE, true);
-  NumericComparisons<GenericKey<64>, int64_t>(type::TypeId::BIGINT, true);
-  NumericComparisons<GenericKey<64>, double>(type::TypeId::REAL, true);
-  NumericComparisons<GenericKey<64>, uint64_t>(type::TypeId::TIMESTAMP, true);
+  NumericComparisons<GenericKey, int8_t>(type::TypeId::TINYINT, true);
+  NumericComparisons<GenericKey, int16_t>(type::TypeId::SMALLINT, true);
+  NumericComparisons<GenericKey, int32_t>(type::TypeId::INTEGER, true);
+  NumericComparisons<GenericKey, uint32_t>(type::TypeId::DATE, true);
+  NumericComparisons<GenericKey, int64_t>(type::TypeId::BIGINT, true);
+  NumericComparisons<GenericKey, double>(type::TypeId::REAL, true);
+  NumericComparisons<GenericKey, uint64_t>(type::TypeId::TIMESTAMP, true);
 }
 
 template <typename KeyType, typename CType>
@@ -1058,13 +1058,13 @@ TEST_F(IndexKeyTests, GenericKeyInlineVarlenComparisons) {
   VarlenEntry data =
       VarlenEntry::CreateInline(reinterpret_cast<byte *>(john), static_cast<uint32_t>(std::strlen(john)));
   *reinterpret_cast<VarlenEntry *>(pr->AccessForceNotNull(0)) = data;
-  GenericKey<64> key1, key2;
+  GenericKey key1, key2;
   key1.SetFromProjectedRow(*pr, metadata, 1);
   key2.SetFromProjectedRow(*pr, metadata, 1);
 
-  const auto generic_eq64 = std::equal_to<GenericKey<64>>();  // NOLINT transparent functors can't figure out template
-  const auto generic_lt64 = std::less<GenericKey<64>>();      // NOLINT transparent functors can't figure out template
-  const auto generic_hash64 = std::hash<GenericKey<64>>();    // NOLINT transparent functors can't figure out template
+  const auto generic_eq64 = std::equal_to<GenericKey>();  // NOLINT transparent functors can't figure out template
+  const auto generic_lt64 = std::less<GenericKey>();      // NOLINT transparent functors can't figure out template
+  const auto generic_hash64 = std::hash<GenericKey>();    // NOLINT transparent functors can't figure out template
 
   // lhs: "john", rhs: "john" (same prefixes, same strings (both <= prefix))
   EXPECT_TRUE(generic_eq64(key1, key2));

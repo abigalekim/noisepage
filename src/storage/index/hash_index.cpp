@@ -265,8 +265,5 @@ template class HashIndex<HashKey<64>>;
 template class HashIndex<HashKey<128>>;
 template class HashIndex<HashKey<256>>;
 
-template class HashIndex<GenericKey<64>>;
-template class HashIndex<GenericKey<128>>;
-template class HashIndex<GenericKey<256>>;
 
 }  // namespace noisepage::storage::index

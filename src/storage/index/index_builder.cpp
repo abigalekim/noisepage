@@ -84,15 +84,7 @@ Index *IndexBuilder::BuildBwTreeGenericKey(IndexMetadata metadata) const {
       sizeof(uintptr_t);  // account for potential padding of the PR and the size of the pointer for metadata
   NOISEPAGE_ASSERT(key_size <= GENERICKEY_MAX_SIZE, "Key size exceeds maximum for this key type.");
 
-  if (key_size <= 64) {
-    index = new BwTreeIndex<GenericKey<64>>(std::move(metadata));
-  } else if (key_size <= 128) {
-    index = new BwTreeIndex<GenericKey<128>>(std::move(metadata));
-  } else if (key_size <= 256) {
-    index = new BwTreeIndex<GenericKey<256>>(std::move(metadata));
-  } else if (key_size <= 512) {
-    index = new BwTreeIndex<GenericKey<512>>(std::move(metadata));
-  }
+  index = new BwTreeIndex<GenericKey>(std::move(metadata));
   NOISEPAGE_ASSERT(index != nullptr, "Failed to create an GenericKey index.");
   return index;
 }
@@ -125,15 +117,7 @@ Index *IndexBuilder::BuildBPlusTreeGenericKey(IndexMetadata metadata) const {
       sizeof(uintptr_t);  // account for potential padding of the PR and the size of the pointer for metadata
   NOISEPAGE_ASSERT(key_size <= GENERICKEY_MAX_SIZE, "Key size exceeds maximum for this key type.");
 
-  if (key_size <= 64) {
-    index = new BPlusTreeIndex<GenericKey<64>>(std::move(metadata));
-  } else if (key_size <= 128) {
-    index = new BPlusTreeIndex<GenericKey<128>>(std::move(metadata));
-  } else if (key_size <= 256) {
-    index = new BPlusTreeIndex<GenericKey<256>>(std::move(metadata));
-  } else if (key_size <= 512) {
-    index = new BPlusTreeIndex<GenericKey<512>>(std::move(metadata));
-  }
+  index = new BwTreeIndex<GenericKey>(std::move(metadata));
   NOISEPAGE_ASSERT(index != nullptr, "Failed to create an GenericKey index.");
   return index;
 }
@@ -162,20 +146,8 @@ Index *IndexBuilder::BuildHashIntsKey(IndexMetadata metadata) const {
 
 Index *IndexBuilder::BuildHashGenericKey(IndexMetadata metadata) const {
   metadata.SetKeyKind(IndexKeyKind::GENERICKEY);
-  const auto pr_size = metadata.GetInlinedPRInitializer().ProjectedRowSize();
   Index *index = nullptr;
-
-  const auto key_size =
-      (pr_size + 8) +
-      sizeof(uintptr_t);  // account for potential padding of the PR and the size of the pointer for metadata
-
-  if (key_size <= 64) {
-    index = new HashIndex<GenericKey<64>>(std::move(metadata));
-  } else if (key_size <= 128) {
-    index = new HashIndex<GenericKey<128>>(std::move(metadata));
-  } else if (key_size <= 256) {
-    index = new HashIndex<GenericKey<256>>(std::move(metadata));
-  }
+  index = new BwTreeIndex<GenericKey>(std::move(metadata));
   NOISEPAGE_ASSERT(index != nullptr, "Failed to create an IntsKey index.");
   return index;
 }

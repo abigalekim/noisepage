@@ -205,9 +205,4 @@ template class BPlusTreeIndex<CompactIntsKey<16>>;
 template class BPlusTreeIndex<CompactIntsKey<24>>;
 template class BPlusTreeIndex<CompactIntsKey<32>>;
 
-template class BPlusTreeIndex<GenericKey<64>>;
-template class BPlusTreeIndex<GenericKey<128>>;
-template class BPlusTreeIndex<GenericKey<256>>;
-template class BPlusTreeIndex<GenericKey<512>>;
-
 }  // namespace noisepage::storage::index
